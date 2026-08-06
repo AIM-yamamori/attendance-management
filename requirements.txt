@@ -1,0 +1,6 @@
+streamlit==1.60.*
+openpyxl==3.1.*
+bcrypt==4.2.*
+reportlab==4.2.*
+requests==2.32.*
+python-dotenv==1.0.*
