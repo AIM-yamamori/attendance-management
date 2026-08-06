@@ -97,6 +97,7 @@ def _render_login_page() -> None:
                 employee_id=user.employee_id,
                 last_name=user.last_name,
                 first_name=user.first_name,
+                department=user.department,
                 role=user.role,
             )
             st.rerun()

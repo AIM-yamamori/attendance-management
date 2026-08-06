@@ -35,6 +35,7 @@ import streamlit as st
 _KEY_EMPLOYEE_ID = "employee_id"
 _KEY_LAST_NAME = "last_name"
 _KEY_FIRST_NAME = "first_name"
+_KEY_DEPARTMENT = "department"
 _KEY_ROLE = "role"
 _KEY_LOGGED_IN = "logged_in"
 
@@ -45,6 +46,7 @@ class SessionUser:
     employee_id: str
     last_name: str
     first_name: str
+    department: str
     role: str  # "admin" | "general"
 
     @property
@@ -52,11 +54,23 @@ class SessionUser:
         return f"{self.last_name} {self.first_name}"
 
     @property
+    def full_name_no_space(self) -> str:
+        """ファイル名用の氏名結合（スペースなし）。要件定義書4.2節・5.1節。"""
+        return f"{self.last_name}{self.first_name}"
+
+    @property
+    def full_name_with_space(self) -> str:
+        """Excel AH5セル用の氏名結合（全角スペース）。要件定義書4.2節。"""
+        return f"{self.last_name}　{self.first_name}"
+
+    @property
     def is_admin(self) -> bool:
         return self.role == "admin"
 
 
-def start_session(employee_id: str, last_name: str, first_name: str, role: str) -> None:
+def start_session(
+    employee_id: str, last_name: str, first_name: str, department: str, role: str
+) -> None:
     """
     ログイン成功時に呼び出し、セッションにユーザー情報を保存する。
     以後、ページを移動してもこの情報は保持され続ける。
@@ -64,6 +78,7 @@ def start_session(employee_id: str, last_name: str, first_name: str, role: str) 
     st.session_state[_KEY_EMPLOYEE_ID] = employee_id
     st.session_state[_KEY_LAST_NAME] = last_name
     st.session_state[_KEY_FIRST_NAME] = first_name
+    st.session_state[_KEY_DEPARTMENT] = department
     st.session_state[_KEY_ROLE] = role
     st.session_state[_KEY_LOGGED_IN] = True
 
@@ -104,6 +119,7 @@ def get_current_user() -> Optional[SessionUser]:
         employee_id=st.session_state.get(_KEY_EMPLOYEE_ID, ""),
         last_name=st.session_state.get(_KEY_LAST_NAME, ""),
         first_name=st.session_state.get(_KEY_FIRST_NAME, ""),
+        department=st.session_state.get(_KEY_DEPARTMENT, ""),
         role=st.session_state.get(_KEY_ROLE, "general"),
     )
 
