@@ -472,3 +472,63 @@ def load_example(handle: WorkbookHandle) -> AttendanceData:
         header=header,
         entries=entries,
     )
+
+
+# ============================================
+# 編集・保存（Day5、基本設計書3.5.4節）
+# ============================================
+
+@dataclass
+class DayEditInput:
+    """
+    編集フォームから受け取る1日分の入力値。
+    自動計算項目（休憩・実働・超勤等）は編集対象外のため含まない
+    （基本設計書3.5.3節・7.3節：編集画面では自動計算項目は非表示）。
+    """
+    row: int
+    leave_type: str
+    start_time: Optional[tuple[int, int]]
+    end_time: Optional[tuple[int, int]]
+    leave_time: Optional[tuple[int, int]]
+    work_note: str
+
+
+def save_attendance(handle: WorkbookHandle, edits: list[DayEditInput]) -> None:
+    """
+    編集フォームの入力内容を「原本」シートへまとめて反映し、OneDriveへ
+    保存する（画面全体を1回でまとめて保存する方式。基本設計書3.5.4節）。
+
+    処理の流れ：
+    1. 保存用にワークブックを開き直す（data_only=Trueの表示専用版とは
+       別に、数式を保持したまま書き込み用として開く必要があるため）。
+    2. 各行についてexcel_adapter.write_day_cellで値のみを更新する
+       （書式・数式・他のセルには一切触れない）。
+    3. ローカルへ保存し、OneDriveへアップロードする（overwrite=True。
+       既存ファイルの更新のため、新規生成時のような排他制御は不要）。
+
+    休暇種類が空文字（""）の場合はNoneとしてセルに書き込み、
+    「未選択＝通常勤務」を表現する（excel_adapter.LEAVE_TYPE_OPTIONSの
+    先頭要素が空文字であることに対応）。
+    """
+    workbook = excel_adapter.load_workbook_from_path(handle.local_path)
+
+    for edit in edits:
+        excel_adapter.write_day_cell(
+            workbook,
+            row=edit.row,
+            leave_type=edit.leave_type or None,
+            start_time=edit.start_time,
+            end_time=edit.end_time,
+            leave_time=edit.leave_time,
+            work_note=edit.work_note or None,
+            set_leave_type=True,
+            set_start_time=True,
+            set_end_time=True,
+            set_leave_time=True,
+            set_work_note=True,
+        )
+
+    excel_adapter.save_workbook_to_path(workbook, handle.local_path)
+    onedrive_adapter.upload_file(
+        handle.local_path, handle.onedrive_relative_path, overwrite=True
+    )

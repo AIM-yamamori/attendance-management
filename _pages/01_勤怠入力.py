@@ -3,31 +3,246 @@
 
 【概要】
 一般ユーザー用の勤怠入力・閲覧画面（SC-02）。
-基本設計書3.5節に基づき、Day4では以下を実装する。
 
-- ヘッダー（対象年月表示・切替、氏名・社員番号・部署名表示、
-  ロック状態バッジ、ヘルプボタンの土台）
-- 対象年月の選択制御（当年当月デフォルト・翌月まで選択可・
-  運用開始月より前は選択肢に表示しない。基本設計書3.5.2節）
-- プレビュー表示（読み取り専用テーブル。休憩・実働・超勤等の
-  自動計算項目も含めた全項目表示。基本設計書3.5.3節）
+Day4: ヘッダー表示、対象年月選択、プレビュー表示（読み取り専用）
+Day5: 編集モードへの切り替え・入力・保存（本ファイルで実装）
 
-編集モードへの切り替え・入力・保存（Day5）、バリデーション（Day6）、
-ロックの実処理（Day7）は本ファイルでは扱わない。編集ボタンは
-土台として配置するが、押しても「Day5で実装予定」の案内を出すのみ。
+バリデーション（Day6）、ロックの実処理（Day7）は本ファイルでは扱わない。
 """
 
 import datetime
 
 import streamlit as st
 
-from services import attendance_service, lock_service, session_service, settings_service
-
 from adapters import excel_adapter
+from services import attendance_service, lock_service, session_service, settings_service
 
 user = session_service.require_general_user()
 
 st.title("勤怠入力・閲覧")
+
+
+# ============================================
+# 表示用ヘルパー関数（プレビュー・編集共通）
+# ============================================
+
+def _format_time(value) -> str:
+    """(時, 分) のタプルを "H:MM" 表示に整形する。Noneは "--:--" とする。"""
+    if value is None:
+        return "--:--"
+    hour, minute = value
+    return f"{hour}:{minute:02d}"
+
+
+def _format_plain(value) -> str:
+    """自動計算項目等、そのまま表示してよい値の整形（Noneは空文字）。"""
+    return "" if value is None else str(value)
+
+
+def _render_preview_table(attendance_data) -> None:
+    """
+    読み取り専用のプレビューテーブルを表示する（基本設計書3.5.3節）。
+
+    日付が存在しない行（月末超過分等、Excelテンプレートの31日分確保用の
+    空行）はそもそもテーブルに含めない。これは attendance_service 側で
+    対象月の実日数分しか date_value が埋まらない設計になっているため、
+    ここで除外すれば「存在しない日付」が表示されることはない
+    （ダミーの31日分埋めは行わない）。
+    """
+    st.subheader("勤怠データ（プレビュー）")
+
+    table_rows = []
+    for entry in attendance_data.entries:
+        if entry.date_value is None:
+            continue
+
+        table_rows.append(
+            {
+                "日": entry.date_value,
+                "曜日": entry.weekday or "",
+                "休暇種類": entry.leave_type or "",
+                "始業": _format_time(entry.start_time),
+                "終業": _format_time(entry.end_time),
+                "休憩1": _format_plain(entry.break_time_1),
+                "休憩2": _format_plain(entry.break_time_2),
+                "休憩3": _format_plain(entry.break_time_3),
+                "離業": _format_time(entry.leave_time),
+                "実働": _format_plain(entry.actual_work_time),
+                "超勤": _format_plain(entry.overtime),
+                "休出": _format_plain(entry.holiday_work),
+                "深夜": _format_plain(entry.late_night),
+                "自社工数内容": entry.work_note or "",
+            }
+        )
+
+    if not table_rows:
+        st.info(
+            "この月のデータはまだありません。"
+            "「編集する」から入力を始めてください。"
+        )
+    else:
+        st.dataframe(table_rows, use_container_width=True, hide_index=True)
+        st.caption(
+            "※プレビュー時は休憩・実働・超勤・休日出勤・深夜・深夜開始時間・"
+            "合計欄などの自動計算項目もあわせて表示しています。"
+            "編集画面ではこれらは表示されません（基本設計書3.5.3節）。"
+        )
+
+
+_HOUR_OPTIONS = ["未入力"] + [str(h) for h in range(24)]
+_MINUTE_OPTIONS = ["未入力"] + [f"{m:02d}" for m in range(60)]
+
+
+def _time_tuple_to_hour_minute_str(value):
+    """(時,分)タプルをプルダウン表示用の文字列2つに分解する。"""
+    if value is None:
+        return "未入力", "未入力"
+    hour, minute = value
+    return str(hour), f"{minute:02d}"
+
+
+def _hour_minute_str_to_time_tuple(hour_str: str, minute_str: str):
+    """
+    プルダウンの選択結果を(時,分)タプルに変換する。
+    どちらか一方でも「未入力」の場合はNone（未入力扱い）とする。
+    """
+    if hour_str == "未入力" or minute_str == "未入力":
+        return None
+    return int(hour_str), int(minute_str)
+
+
+def _render_edit_form(handle, attendance_data) -> None:
+    """
+    編集フォームを表示する（画面全体をまとめて1回で保存する方式。
+    基本設計書3.5.4節）。自動計算項目（休憩・実働・超勤等）は
+    編集対象外のため表示しない（基本設計書3.5.3節・7.3節）。
+    """
+    st.subheader("勤怠データ（編集）")
+    st.caption(
+        "休憩・実働・超勤などの自動計算項目は編集画面には表示されません。"
+        "保存後、プレビュー画面で自動計算結果を確認してください。"
+    )
+
+    editable_entries = [e for e in attendance_data.entries if e.date_value is not None]
+
+    with st.form("attendance_edit_form"):
+        edit_rows: list[dict] = []
+
+        for i, entry in enumerate(editable_entries):
+            st.markdown(f"**{entry.date_value}（{entry.weekday or ''}）**")
+
+            cols = st.columns([2, 1, 1, 1, 1, 1, 1, 2])
+            show_labels = i == 0
+
+            with cols[0]:
+                leave_type = st.selectbox(
+                    "休暇種類",
+                    options=excel_adapter.LEAVE_TYPE_OPTIONS,
+                    index=(
+                        excel_adapter.LEAVE_TYPE_OPTIONS.index(entry.leave_type)
+                        if entry.leave_type in excel_adapter.LEAVE_TYPE_OPTIONS
+                        else 0
+                    ),
+                    key=f"leave_type_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+
+            start_h_def, start_m_def = _time_tuple_to_hour_minute_str(entry.start_time)
+            with cols[1]:
+                start_hour = st.selectbox(
+                    "始業(時)", _HOUR_OPTIONS,
+                    index=_HOUR_OPTIONS.index(start_h_def),
+                    key=f"start_hour_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+            with cols[2]:
+                start_minute = st.selectbox(
+                    "始業(分)", _MINUTE_OPTIONS,
+                    index=_MINUTE_OPTIONS.index(start_m_def),
+                    key=f"start_minute_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+
+            end_h_def, end_m_def = _time_tuple_to_hour_minute_str(entry.end_time)
+            with cols[3]:
+                end_hour = st.selectbox(
+                    "終業(時)", _HOUR_OPTIONS,
+                    index=_HOUR_OPTIONS.index(end_h_def),
+                    key=f"end_hour_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+            with cols[4]:
+                end_minute = st.selectbox(
+                    "終業(分)", _MINUTE_OPTIONS,
+                    index=_MINUTE_OPTIONS.index(end_m_def),
+                    key=f"end_minute_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+
+            leave_h_def, leave_m_def = _time_tuple_to_hour_minute_str(entry.leave_time)
+            with cols[5]:
+                leave_hour = st.selectbox(
+                    "離業(時)", _HOUR_OPTIONS,
+                    index=_HOUR_OPTIONS.index(leave_h_def),
+                    key=f"leave_hour_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+            with cols[6]:
+                leave_minute = st.selectbox(
+                    "離業(分)", _MINUTE_OPTIONS,
+                    index=_MINUTE_OPTIONS.index(leave_m_def),
+                    key=f"leave_minute_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+
+            with cols[7]:
+                work_note = st.text_input(
+                    "自社工数内容",
+                    value=entry.work_note or "",
+                    key=f"work_note_{entry.row}",
+                    label_visibility="visible" if show_labels else "collapsed",
+                )
+
+            edit_rows.append(
+                {
+                    "row": entry.row,
+                    "leave_type": leave_type,
+                    "start_hour": start_hour,
+                    "start_minute": start_minute,
+                    "end_hour": end_hour,
+                    "end_minute": end_minute,
+                    "leave_hour": leave_hour,
+                    "leave_minute": leave_minute,
+                    "work_note": work_note,
+                }
+            )
+
+        submitted = st.form_submit_button("保存する", use_container_width=True)
+
+    if submitted:
+        edits = [
+            attendance_service.DayEditInput(
+                row=r["row"],
+                leave_type=r["leave_type"],
+                start_time=_hour_minute_str_to_time_tuple(r["start_hour"], r["start_minute"]),
+                end_time=_hour_minute_str_to_time_tuple(r["end_hour"], r["end_minute"]),
+                leave_time=_hour_minute_str_to_time_tuple(r["leave_hour"], r["leave_minute"]),
+                work_note=r["work_note"],
+            )
+            for r in edit_rows
+        ]
+
+        with st.spinner("保存しています..."):
+            attendance_service.save_attendance(handle, edits)
+
+        st.session_state["edit_mode"] = False
+        st.success("保存しました。")
+        st.rerun()
+
+
+# ============================================
+# ここからメイン処理
+# ============================================
 
 # ============================================
 # 対象年月の選択（基本設計書3.5.2節）
@@ -40,8 +255,6 @@ selectable_months = attendance_service.build_selectable_months(
 )
 default_month = attendance_service.default_target_month(today)
 
-# セレクトボックスの初期選択位置。デフォルト月が選択肢に含まれていれば
-# その位置を、含まれていなければ末尾（＝最新の選択可能月）を初期値とする。
 if default_month in selectable_months:
     default_index = selectable_months.index(default_month)
 else:
@@ -53,6 +266,11 @@ target_month = st.selectbox(
     index=default_index,
     format_func=attendance_service.format_month_label,
 )
+
+# 対象年月を切り替えたら編集モードは自動的に解除する
+if st.session_state.get("_edit_target_month") != target_month:
+    st.session_state["edit_mode"] = False
+    st.session_state["_edit_target_month"] = target_month
 
 # ============================================
 # ヘッダー（氏名・社員番号・部署名、ロック状態バッジ、ヘルプボタン）
@@ -68,8 +286,6 @@ with header_col2:
     else:
         st.success("● 未ロック", icon="🔓")
 with header_col3:
-    # ヘルプ（記入例）モーダルはSC-08として別途実装予定。
-    # Day4時点ではボタンのみ配置し、押下時は簡易メッセージを表示する。
     if st.button("ヘルプ", use_container_width=True):
         st.session_state["show_help_notice"] = True
 
@@ -93,14 +309,12 @@ with st.spinner("勤怠データを読み込んでいます..."):
         department=user.department,
     )
     attendance_data = attendance_service.load_attendance(handle)
-    header = attendance_data.header
+
+header = attendance_data.header
 
 # ============================================
 # Excelヘッダー情報表示
 # ============================================
-
-header = attendance_data.header
-
 st.subheader("勤務情報")
 
 col1, col2 = st.columns(2)
@@ -121,7 +335,6 @@ with col1:
         {header.employee_name}
         """
     )
-
 
 with col2:
     st.write(
@@ -150,102 +363,28 @@ with col2:
     )
 
 # ============================================
-# 編集切り替えボタン（土台のみ。実際の編集はDay5で実装）
+# 編集切り替えボタン
 # ============================================
+edit_mode = st.session_state.get("edit_mode", False)
+
 edit_button_col, _ = st.columns([1, 4])
 with edit_button_col:
-    if st.button("編集する", disabled=is_locked, use_container_width=True):
-        st.info("編集機能は Day5 で実装予定です。")
+    if not edit_mode:
+        if st.button("編集する", disabled=is_locked, use_container_width=True):
+            st.session_state["edit_mode"] = True
+            st.rerun()
+    else:
+        if st.button("編集をやめる", use_container_width=True):
+            st.session_state["edit_mode"] = False
+            st.rerun()
 
 if is_locked:
     st.caption("この月はロックされています。編集する場合は管理者に解除を依頼してください。")
 
 # ============================================
-# プレビュー表示（読み取り専用テーブル、自動計算項目を含む全項目）
-# 基本設計書3.5.3節「プレビュー時」列が○のものすべてを表示する。
+# 勤怠データ（プレビュー or 編集）
 # ============================================
-st.subheader("勤怠データ（プレビュー）")
-
-
-def _format_time(value) -> str:
-    """(時, 分) のタプルを "H:MM" 表示に整形する。Noneは "--:--" とする。"""
-    if value is None:
-        return "--:--"
-    hour, minute = value
-    return f"{hour}:{minute:02d}"
-
-
-def _format_plain(value) -> str:
-    """自動計算項目等、そのまま表示してよい値の整形（Noneは空文字）。"""
-    return "" if value is None else str(value)
-
-
-table_rows = []
-
-for entry in attendance_data.entries:
-
-    # 日付が存在しない行は除外
-    # （Excelテンプレートの31日分確保用）
-    if entry.date_value is None:
-        continue
-
-    table_rows.append(
-        {
-            "日": entry.date_value,
-            "曜日": entry.weekday or "",
-            "休暇種類": entry.leave_type or "",
-            "始業": _format_time(entry.start_time),
-            "終業": _format_time(entry.end_time),
-            "休憩1": _format_plain(entry.break_time_1),
-            "休憩2": _format_plain(entry.break_time_2),
-            "休憩3": _format_plain(entry.break_time_3),
-            "離業": _format_time(entry.leave_time),
-            "実働": _format_plain(entry.actual_work_time),
-            "超勤": _format_plain(entry.overtime),
-            "休出": _format_plain(entry.holiday_work),
-            "深夜": _format_plain(entry.late_night),
-            "自社工数内容": entry.work_note or "",
-        }
-    )
-
-
-# ============================================
-# 空データでもテーブル表示する
-# ============================================
-
-if not table_rows:
-
-    # 想定外にExcelから日付が読めなかった場合でも
-    # 表示崩れを防ぐため31日分生成
-    for day in range(1, 32):
-        table_rows.append(
-            {
-                "日": day,
-                "曜日": "",
-                "休暇種類": "",
-                "始業": "--:--",
-                "終業": "--:--",
-                "休憩1": "",
-                "休憩2": "",
-                "休憩3": "",
-                "離業": "--:--",
-                "実働": "",
-                "超勤": "",
-                "休出": "",
-                "深夜": "",
-                "自社工数内容": "",
-            }
-        )
-
-
-st.dataframe(
-    table_rows,
-    use_container_width=True,
-    hide_index=True
-)
-
-
-st.caption(
-    "※プレビュー時は休憩・実働・超勤・休日出勤・深夜等の"
-    "自動計算項目も表示しています。"
-)
+if edit_mode:
+    _render_edit_form(handle, attendance_data)
+else:
+    _render_preview_table(attendance_data)
