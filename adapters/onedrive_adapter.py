@@ -132,3 +132,16 @@ def list_files(folder_name: str) -> list[str]:
     if not target.is_dir():
         return []
     return sorted(p.name for p in target.iterdir() if p.is_file())
+
+
+def get_last_modified(relative_path: str) -> str:
+    """
+    指定パスのファイルの最終更新日時を表す文字列（ETagやtimestamp等、
+    OneDrive APIが返す一意な識別子）を返す。
+    ファイルが存在しない場合は None を返す。
+
+    楽観的排他制御（同時保存対策）で、読み込み時と保存直前でこの値を
+    比較し、異なっていれば「他の人が更新した」と判断するために使う
+    （基本設計書8.4節相当）。
+    """
+    ...

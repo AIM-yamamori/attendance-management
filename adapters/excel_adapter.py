@@ -327,6 +327,29 @@ def validate_excel_time_string(value: str) -> bool:
     return bool(_TIME_PATTERN.match(value))
 
 
+def time_tuple_to_excel_time(time_tuple: Optional[tuple[int, int]]) -> Optional[datetime.time]:
+    """
+    フロントから受け取る (時, 分) のタプルを、Excelセルへ直接代入するための
+    datetime.time オブジェクトに変換する。
+
+    (時, 分) の文字列（"9:30"等）をそのままセルに代入すると、Excel側では
+    テキストとして解釈され、'（アポストロフィ）付き文字列と同等の状態に
+    なってしまう。datetime.time オブジェクトを代入することで、Excel側で
+    本来の時刻シリアル値として認識される（C8への日付代入と同じ理由。
+    要件定義書4.2節・4.3節）。
+
+    time_tuple が None の場合は None を返す（未入力＝セルを空にする）。
+    """
+    if time_tuple is None:
+        return None
+    hour, minute = time_tuple
+    if not (0 <= hour <= 23):
+        raise ValueError(f"時は0〜23の範囲で指定してください: {hour}")
+    if not (0 <= minute <= 59):
+        raise ValueError(f"分は0〜59の範囲で指定してください: {minute}")
+    return datetime.time(hour, minute)
+
+
 # ============================================
 # 4. 日次データの読み書き（原本シート・記入例シート共通）
 # ============================================
@@ -334,23 +357,22 @@ def validate_excel_time_string(value: str) -> bool:
 @dataclass
 class DayCellValues:
     """1日分の「原本シート上」の生データ（セル位置に対応する値そのもの）"""
-    row: int
-    date_value: object              # B列の値（日付 or None）
-    weekday: Optional[str]           # 曜日（B列の日付から自動算出、編集不可）
-    leave_type: Optional[str]        # D列
-    start_time: Optional[tuple[int, int]]   # N列
-    end_time: Optional[tuple[int, int]]     # Q列
-    leave_time: Optional[tuple[int, int]]   # AC列
-    work_note: Optional[str]         # AP列
-    # 以下は自動計算項目（プレビュー表示のみ、編集画面では非表示。
-    # 基本設計書3.5.3節・7.3節）
-    break_time_1: object               # 休憩時間1（T列、原本シート記載値をそのまま表示）
-    break_time_2: object               # 休憩時間2（W列、原本シート記載値をそのまま表示）
-    break_time_3: object               # 休憩時間3（Z列、原本シート記載値をそのまま表示）
-    actual_work_time: object         # 実働時間（S列）
-    overtime: object                 # 超勤（U列）
-    holiday_work: object             # 休日出勤（W列）
-    late_night: object               # 深夜（Y列）
+    row: int          # 日付欄の行番号（B・D列。DATE_START_ROW起点）
+    time_row: int      # 時刻欄の行番号（N・Q・AC・AP等。TIME_START_ROW起点）
+    date_value: object
+    weekday: Optional[str]
+    leave_type: Optional[str]
+    start_time: Optional[tuple[int, int]]
+    end_time: Optional[tuple[int, int]]
+    leave_time: Optional[tuple[int, int]]
+    work_note: Optional[str]
+    break_time_1: object
+    break_time_2: object
+    break_time_3: object
+    actual_work_time: object
+    overtime: object
+    holiday_work: object
+    late_night: object
 
 @dataclass
 class AttendanceHeaderValues:
@@ -468,6 +490,7 @@ def read_day_rows(workbook: Workbook, sheet_name: str = SHEET_HONBUN) -> list[Da
         results.append(
             DayCellValues(
                 row=date_row,
+                time_row=time_row,
                 date_value=date_value,
                 weekday=_calc_weekday_label(date_value),
                 leave_type=leave_type,
@@ -490,7 +513,8 @@ def read_day_rows(workbook: Workbook, sheet_name: str = SHEET_HONBUN) -> list[Da
 
 def write_day_cell(
     workbook: Workbook,
-    row: int,
+    date_row: int,
+    time_row: int,
     *,
     leave_type: Optional[str] = None,
     start_time: Optional[tuple[int, int]] = None,
@@ -504,42 +528,50 @@ def write_day_cell(
     set_work_note: bool = False,
 ) -> None:
     """
-    「原本」シートの指定行（row）に対し、指定された項目のみを更新する。
+    「原本」シートの指定行に対し、指定された項目のみを更新する。
 
-    set_xxx フラグが True の項目だけを書き込む設計にしている理由：
-    「休暇種類は変更せず、始業時間だけ更新したい」といった部分更新を
-    行う際に、意図せず他の項目を None で上書きしてしまう事故を防ぐため
-    （呼び出し側が明示的に「この項目を更新する」と宣言しない限り、
-    そのセルには一切触れない）。
-
-    対象セルの .value のみを書き換え、行の挿入・削除やスタイル
-    オブジェクトの再代入は行わない（書式保持。基本設計書6.4節）。
+    時刻項目（始業・終業・離業）はExcel側に本来の時刻シリアル値として
+    入力されるよう、文字列ではなく datetime.time オブジェクトを代入する
+    （'付き文字列相当になることを防ぐため）。保存直前の形式チェックは、
+    文字列変換版（time_tuple_to_excel_string）を使って別途行う
+    （validate_excel_time_stringは文字列を前提とした正規表現チェックの
+    ため、セルへの代入とは別に検証用の文字列を都度生成する）。
     """
     ws = workbook[SHEET_HONBUN]
 
     if set_leave_type:
-        ws[f"{COL_LEAVE_TYPE}{row}"] = leave_type
+        ws[f"{COL_LEAVE_TYPE}{date_row}"] = leave_type
 
     if set_start_time:
-        excel_value = time_tuple_to_excel_string(start_time)
-        if excel_value is not None and not validate_excel_time_string(excel_value):
-            raise ExcelFormatError(f"始業時間の形式が不正です: {excel_value!r}")
-        ws[f"{COL_START_TIME}{row}"] = excel_value
+        _validate_time_tuple_format(start_time, "始業時間")
+        ws[f"{COL_START_TIME}{time_row}"] = time_tuple_to_excel_time(start_time)
 
     if set_end_time:
-        excel_value = time_tuple_to_excel_string(end_time)
-        if excel_value is not None and not validate_excel_time_string(excel_value):
-            raise ExcelFormatError(f"終業時間の形式が不正です: {excel_value!r}")
-        ws[f"{COL_END_TIME}{row}"] = excel_value
+        _validate_time_tuple_format(end_time, "終業時間")
+        ws[f"{COL_END_TIME}{time_row}"] = time_tuple_to_excel_time(end_time)
 
     if set_leave_time:
-        excel_value = time_tuple_to_excel_string(leave_time)
-        if excel_value is not None and not validate_excel_time_string(excel_value):
-            raise ExcelFormatError(f"離業時間の形式が不正です: {excel_value!r}")
-        ws[f"{COL_LEAVE_TIME}{row}"] = excel_value
+        _validate_time_tuple_format(leave_time, "離業時間")
+        ws[f"{COL_LEAVE_TIME}{time_row}"] = time_tuple_to_excel_time(leave_time)
 
     if set_work_note:
-        ws[f"{COL_WORK_NOTE}{row}"] = work_note
+        ws[f"{COL_WORK_NOTE}{time_row}"] = work_note
+
+
+def _validate_time_tuple_format(time_tuple: Optional[tuple[int, int]], field_label: str) -> None:
+    """
+    保存直前の最終防御チェック（要件定義書4.6節・基本設計書7.4節）。
+    (時, 分) タプルを一旦 "H:MM" 形式の文字列に変換し、正規表現で
+    形式が正しいかを確認する。datetime.time自体は時・分の範囲を
+    コンストラクタで検証済みだが、既存のvalidate_excel_time_string
+    （文字列前提のチェック）をそのまま活かすため、ここで文字列化して
+    再確認する。
+    """
+    if time_tuple is None:
+        return
+    excel_value = time_tuple_to_excel_string(time_tuple)
+    if not validate_excel_time_string(excel_value):
+        raise ExcelFormatError(f"{field_label}の形式が不正です: {excel_value!r}")
 
 
 def read_target_month_first_day(workbook: Workbook) -> Optional[datetime.date]:
@@ -671,7 +703,208 @@ def format_time_value_no_seconds(value) -> str:
     return str(value)
 
 
+def _time_tuple_to_decimal_hours(value: Optional[tuple[int, int]]) -> Optional[float]:
+    """
+    (時, 分) タプルを、Excelの時刻シリアル値と同じ考え方の「時間の小数表現」
+    （例：9:30 → 9.5）に変換する。Excelのセル同士の引き算
+    （例：Q11-N11）は、内部的にはこの小数表現同士の引き算と等価であるため、
+    自動計算列の再現にはこの単位で計算する。
+    """
+    if value is None:
+        return None
+    hour, minute = value
+    return hour + minute / 60.0
 
+
+def _decimal_hours_to_time_tuple(value: Optional[float]) -> Optional[tuple[int, int]]:
+    """小数表現の時間を (時, 分) タプルに戻す（表示用）。負値もそのまま許容する。"""
+    if value is None:
+        return None
+    sign = -1 if value < 0 else 1
+    total_minutes = round(abs(value) * 60)
+    hour, minute = divmod(total_minutes, 60)
+    return (sign * hour if hour != 0 else (0 if sign > 0 else -0), minute) if False else (
+        (sign * hour, minute) if sign < 0 or hour > 0 else (0, minute)
+    )
+
+
+@dataclass
+class AutoCalculatedValues:
+    """
+    自動計算列の再計算結果（基本設計書には存在しない、Python側での
+    数式再現の結果を表すDTO）。値は (時, 分) タプル、または
+    計算対象外の場合は None。
+    """
+    break_time_1: Optional[tuple[int, int]]
+    break_time_2: Optional[tuple[int, int]]
+    break_time_3: Optional[tuple[int, int]]
+    actual_work_time: Optional[tuple[int, int]]
+    overtime: Optional[tuple[int, int]]
+    holiday_work: Optional[tuple[int, int]]
+    late_night: Optional[tuple[int, int]]
+
+
+def calc_auto_values(
+    leave_type: Optional[str],
+    start_time: Optional[tuple[int, int]],
+    end_time: Optional[tuple[int, int]],
+    break_time_1_input: Optional[tuple[int, int]],
+    break_time_2: Optional[tuple[int, int]],
+    break_time_3: Optional[tuple[int, int]],
+    leave_time: Optional[tuple[int, int]],
+    scheduled_work_time: Optional[tuple[int, int]],
+    night_start_time: Optional[tuple[int, int]],
+    break_1_start: Optional[tuple[int, int]],
+    break_1_end: Optional[tuple[int, int]],
+) -> AutoCalculatedValues:
+    """
+    Excel側の自動計算列の数式をPython側で再現し、計算結果を返す。
+
+    再現対象の数式（11行目時点でのセル参照例）：
+
+    休憩時間1 = IF(休暇種類 in (午前半休,午後半休), 0,
+                    IF(始業と終業が両方入力されている,
+                       MIN(MAX(終業,休憩1開始),休憩1終了)
+                         - MAX(MIN(始業,休憩1終了),休憩1開始),
+                       ""))
+        → 勤務時間帯（始業〜終業）と、休憩1の固定時間帯（$G$19〜$H$19）
+          との共通区間の長さを休憩時間1とする（区間交差計算）。
+
+    休憩時間2・3 = 手入力値のため計算しない（引数の値をそのまま使う）。
+
+    実働時間 = IF(始業="", "：",
+                  終業 - 始業 - (入力されている休憩1・休憩2・休憩3・離業の合計))
+        ※休憩1は、上記で計算した値を使う。
+
+    超勤 = IF(休暇種類 in (午前半休,午後半休), 0,
+              IF(休暇種類=休日出勤, "：",
+              IF(始業が空, "：", 実働時間 - 所定労働時間)))
+        → 所定労働時間より実働時間が短い場合は負の値（マイナス）になる。
+
+    休日出勤 = IF(休暇種類=休日出勤, 実働時間, "：")
+
+    深夜 = IF(始業が空, "：",
+              IF(終業<=深夜開始時刻, "：", 終業 - 深夜開始時刻))
+
+    引数:
+        break_time_1_input: 呼び出し側が保持している休憩1の値
+            （読み取り専用の表示にしか使わない。計算結果で上書きされる）
+        break_1_start, break_1_end: 休憩時間1の固定時間帯
+            （header.break_time_1_start / break_time_1_end に対応）
+    """
+    start = _time_tuple_to_decimal_hours(start_time)
+    end = _time_tuple_to_decimal_hours(end_time)
+    b2 = _time_tuple_to_decimal_hours(break_time_2)
+    b3 = _time_tuple_to_decimal_hours(break_time_3)
+    leave = _time_tuple_to_decimal_hours(leave_time)
+    scheduled = _time_tuple_to_decimal_hours(scheduled_work_time)
+    night_start = _time_tuple_to_decimal_hours(night_start_time)
+    break_1_start_dec = _time_tuple_to_decimal_hours(break_1_start)
+    break_1_end_dec = _time_tuple_to_decimal_hours(break_1_end)
+
+    # ------------------------------------------------
+    # 休憩時間1（区間交差計算）
+    # ------------------------------------------------
+    if leave_type in ("午前半休", "午後半休"):
+        break_1_decimal = 0.0
+    elif start is None or end is None:
+        break_1_decimal = None  # Excel側は "" だが、ここではNoneで「未計算」を表す
+    elif break_1_start_dec is None or break_1_end_dec is None:
+        # 休憩1の固定時間帯自体がヘッダーに設定されていない場合は計算不能
+        break_1_decimal = None
+    else:
+        overlap_end = min(max(end, break_1_start_dec), break_1_end_dec)
+        overlap_start = max(min(start, break_1_end_dec), break_1_start_dec)
+        break_1_decimal = overlap_end - overlap_start
+        if break_1_decimal < 0:
+            break_1_decimal = 0.0
+
+    # ------------------------------------------------
+    # 実働時間（休憩1は上記の計算結果を使う）
+    # ------------------------------------------------
+    if start is None:
+        actual_work_decimal = None
+    else:
+        deduction = 0.0
+        if break_1_decimal is not None:
+            deduction += break_1_decimal
+        if b2 is not None:
+            deduction += b2
+        if b3 is not None:
+            deduction += b3
+        if leave is not None:
+            deduction += leave
+        actual_work_decimal = (end or 0.0) - start - deduction
+
+    # ------------------------------------------------
+    # 超勤：所定労働時間と実働時間の差。実働が所定に足りなければマイナス。
+    # ------------------------------------------------
+    if leave_type in ("午前半休", "午後半休"):
+        overtime_decimal = 0.0
+    elif leave_type == "休日出勤":
+        overtime_decimal = None
+    elif start is None:
+        overtime_decimal = None
+    else:
+        overtime_decimal = (
+            None if actual_work_decimal is None or scheduled is None
+            else actual_work_decimal - scheduled
+        )
+
+    # ------------------------------------------------
+    # 休日出勤
+    # ------------------------------------------------
+    if leave_type == "休日出勤":
+        holiday_work_decimal = actual_work_decimal
+    else:
+        holiday_work_decimal = None
+
+    # ------------------------------------------------
+    # 深夜
+    # ------------------------------------------------
+    if start is None:
+        late_night_decimal = None
+    elif end is None or night_start is None or end <= night_start:
+        late_night_decimal = None
+    else:
+        late_night_decimal = end - night_start
+
+    return AutoCalculatedValues(
+        break_time_1=_decimal_hours_to_time_tuple(break_1_decimal),
+        break_time_2=break_time_2,
+        break_time_3=break_time_3,
+        actual_work_time=_decimal_hours_to_time_tuple(actual_work_decimal),
+        overtime=_decimal_hours_to_time_tuple(overtime_decimal),
+        holiday_work=_decimal_hours_to_time_tuple(holiday_work_decimal),
+        late_night=_decimal_hours_to_time_tuple(late_night_decimal),
+    )
+
+
+def header_time_value_to_tuple(value) -> Optional[tuple[int, int]]:
+    """
+    ヘッダー領域の時刻セル値（深夜開始時間・所定等）を (時, 分) タプルに
+    変換する。datetime.time / datetime.datetime / datetime.timedelta /
+    文字列のいずれにも対応する（format_time_value_no_secondsと対になる
+    変換だが、こちらは表示用文字列ではなく計算用のタプルを返す）。
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, datetime.timedelta):
+        total_minutes = int(value.total_seconds() // 60)
+        hour, minute = divmod(total_minutes, 60)
+        return (hour, minute)
+
+    if hasattr(value, "hour") and hasattr(value, "minute"):
+        return (value.hour, value.minute)
+
+    if isinstance(value, str):
+        text = value.strip().replace("：", ":")
+        match = re.match(r"^(\d{1,2}):(\d{1,2})(?::\d{1,2}(?:\.\d+)?)?$", text)
+        if match:
+            return (int(match.group(1)), int(match.group(2)))
+
+    return None
 
 
 # ============================================

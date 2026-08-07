@@ -15,7 +15,7 @@ import datetime
 import streamlit as st
 
 from adapters import excel_adapter
-from services import attendance_service, lock_service, session_service, settings_service
+from services import attendance_service, lock_service, session_service, settings_service, validation_service
 
 user = session_service.require_general_user()
 
@@ -27,10 +27,11 @@ st.title("勤怠入力・閲覧")
 # ============================================
 
 def _format_time(value) -> str:
-    """(時, 分) のタプルを "H:MM" 表示に整形する。Noneは "--:--" とする。"""
     if value is None:
         return "--:--"
     hour, minute = value
+    if hour < 0:
+        return f"-{abs(hour)}:{minute:02d}"
     return f"{hour}:{minute:02d}"
 
 
@@ -63,14 +64,14 @@ def _render_preview_table(attendance_data) -> None:
                 "休暇種類": entry.leave_type or "",
                 "始業": _format_time(entry.start_time),
                 "終業": _format_time(entry.end_time),
-                "休憩1": _format_plain(entry.break_time_1),
-                "休憩2": _format_plain(entry.break_time_2),
-                "休憩3": _format_plain(entry.break_time_3),
+                "休憩1": _format_time(entry.break_time_1),
+                "休憩2": _format_time(entry.break_time_2),
+                "休憩3": _format_time(entry.break_time_3),
                 "離業": _format_time(entry.leave_time),
-                "実働": _format_plain(entry.actual_work_time),
-                "超勤": _format_plain(entry.overtime),
-                "休出": _format_plain(entry.holiday_work),
-                "深夜": _format_plain(entry.late_night),
+                "実働": _format_time(entry.actual_work_time),
+                "超勤": _format_time(entry.overtime),
+                "休出": _format_time(entry.holiday_work),
+                "深夜": _format_time(entry.late_night),
                 "自社工数内容": entry.work_note or "",
             }
         )
@@ -114,8 +115,13 @@ def _hour_minute_str_to_time_tuple(hour_str: str, minute_str: str):
 def _render_edit_form(handle, attendance_data) -> None:
     """
     編集フォームを表示する（画面全体をまとめて1回で保存する方式。
-    基本設計書3.5.4節）。自動計算項目（休憩・実働・超勤等）は
-    編集対象外のため表示しない（基本設計書3.5.3節・7.3節）。
+    基本設計書3.5.4節）。
+
+    要件定義書4.6節に基づき、休暇種類・時刻入力の都度リアルタイムで
+    矛盾を検知する（st.formは使わず、通常のウィジェットで都度rerun
+    させることで実現する）。disabled化の対象は始業(時)〜自社工数内容
+    の全項目とする（休暇区分の日は時刻・工数内容いずれも入力対象外
+    のため）。
     """
     st.subheader("勤怠データ（編集）")
     st.caption(
@@ -125,11 +131,66 @@ def _render_edit_form(handle, attendance_data) -> None:
 
     editable_entries = [e for e in attendance_data.entries if e.date_value is not None]
 
-    with st.form("attendance_edit_form"):
-        edit_rows: list[dict] = []
+    edit_rows: list[dict] = []
+    row_has_error: dict[int, bool] = {}
 
-        for i, entry in enumerate(editable_entries):
+    for i, entry in enumerate(editable_entries):
+        row_key = entry.row
+
+        leave_type_key = f"leave_type_{row_key}"
+        start_hour_key = f"start_hour_{row_key}"
+        start_minute_key = f"start_minute_{row_key}"
+        end_hour_key = f"end_hour_{row_key}"
+        end_minute_key = f"end_minute_{row_key}"
+        leave_hour_key = f"leave_hour_{row_key}"
+        leave_minute_key = f"leave_minute_{row_key}"
+        work_note_key = f"work_note_{row_key}"
+
+        current_leave_type = st.session_state.get(
+            leave_type_key,
+            entry.leave_type if entry.leave_type in excel_adapter.LEAVE_TYPE_OPTIONS else "",
+        )
+
+        is_full_day_leave = current_leave_type in validation_service.FULL_DAY_LEAVE_TYPES
+        is_weekend_without_leave = (entry.weekday in ("土", "日")) and not current_leave_type
+        should_disable_time = is_full_day_leave or is_weekend_without_leave
+
+        # session_stateに既に値があればそれを使い、無ければentryの初期値を
+        # 都度変換する（不要な変換呼び出しを減らすため、無い場合のみ計算）
+        if start_hour_key in st.session_state:
+            current_start_hour = st.session_state[start_hour_key]
+            current_start_minute = st.session_state[start_minute_key]
+        else:
+            current_start_hour, current_start_minute = _time_tuple_to_hour_minute_str(entry.start_time)
+
+        if end_hour_key in st.session_state:
+            current_end_hour = st.session_state[end_hour_key]
+            current_end_minute = st.session_state[end_minute_key]
+        else:
+            current_end_hour, current_end_minute = _time_tuple_to_hour_minute_str(entry.end_time)
+
+        has_time_input = (
+            current_start_hour != "未入力" or current_start_minute != "未入力"
+            or current_end_hour != "未入力" or current_end_minute != "未入力"
+        )
+
+        row_error_message = None
+        if is_full_day_leave and has_time_input:
+            row_error_message = (
+                f"「{current_leave_type}」の日には始業・終業時間を入力できません。"
+                "時刻を未入力に戻してください。"
+            )
+        elif is_weekend_without_leave and has_time_input:
+            row_error_message = "休日に始業・終業時間が入力されています。休暇種類を選択するか、時刻を未入力に戻してください。"
+
+        row_has_error[row_key] = row_error_message is not None
+
+        row_container = st.container(border=row_error_message is not None)
+        with row_container:
             st.markdown(f"**{entry.date_value}（{entry.weekday or ''}）**")
+
+            if row_error_message:
+                st.error(row_error_message, icon="⚠️")
 
             cols = st.columns([2, 1, 1, 1, 1, 1, 1, 2])
             show_labels = i == 0
@@ -138,91 +199,113 @@ def _render_edit_form(handle, attendance_data) -> None:
                 leave_type = st.selectbox(
                     "休暇種類",
                     options=excel_adapter.LEAVE_TYPE_OPTIONS,
-                    index=(
-                        excel_adapter.LEAVE_TYPE_OPTIONS.index(entry.leave_type)
-                        if entry.leave_type in excel_adapter.LEAVE_TYPE_OPTIONS
-                        else 0
-                    ),
-                    key=f"leave_type_{entry.row}",
+                    index=excel_adapter.LEAVE_TYPE_OPTIONS.index(current_leave_type)
+                    if current_leave_type in excel_adapter.LEAVE_TYPE_OPTIONS else 0,
+                    key=leave_type_key,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
 
-            start_h_def, start_m_def = _time_tuple_to_hour_minute_str(entry.start_time)
             with cols[1]:
                 start_hour = st.selectbox(
                     "始業(時)", _HOUR_OPTIONS,
-                    index=_HOUR_OPTIONS.index(start_h_def),
-                    key=f"start_hour_{entry.row}",
+                    index=_HOUR_OPTIONS.index(current_start_hour),
+                    key=start_hour_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
             with cols[2]:
                 start_minute = st.selectbox(
                     "始業(分)", _MINUTE_OPTIONS,
-                    index=_MINUTE_OPTIONS.index(start_m_def),
-                    key=f"start_minute_{entry.row}",
+                    index=_MINUTE_OPTIONS.index(current_start_minute),
+                    key=start_minute_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
 
-            end_h_def, end_m_def = _time_tuple_to_hour_minute_str(entry.end_time)
             with cols[3]:
                 end_hour = st.selectbox(
                     "終業(時)", _HOUR_OPTIONS,
-                    index=_HOUR_OPTIONS.index(end_h_def),
-                    key=f"end_hour_{entry.row}",
+                    index=_HOUR_OPTIONS.index(current_end_hour),
+                    key=end_hour_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
             with cols[4]:
                 end_minute = st.selectbox(
                     "終業(分)", _MINUTE_OPTIONS,
-                    index=_MINUTE_OPTIONS.index(end_m_def),
-                    key=f"end_minute_{entry.row}",
+                    index=_MINUTE_OPTIONS.index(current_end_minute),
+                    key=end_minute_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
 
-            leave_h_def, leave_m_def = _time_tuple_to_hour_minute_str(entry.leave_time)
+            if leave_hour_key in st.session_state:
+                current_leave_hour = st.session_state[leave_hour_key]
+                current_leave_minute = st.session_state[leave_minute_key]
+            else:
+                current_leave_hour, current_leave_minute = _time_tuple_to_hour_minute_str(entry.leave_time)
+
             with cols[5]:
                 leave_hour = st.selectbox(
                     "離業(時)", _HOUR_OPTIONS,
-                    index=_HOUR_OPTIONS.index(leave_h_def),
-                    key=f"leave_hour_{entry.row}",
+                    index=_HOUR_OPTIONS.index(current_leave_hour),
+                    key=leave_hour_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
             with cols[6]:
                 leave_minute = st.selectbox(
                     "離業(分)", _MINUTE_OPTIONS,
-                    index=_MINUTE_OPTIONS.index(leave_m_def),
-                    key=f"leave_minute_{entry.row}",
+                    index=_MINUTE_OPTIONS.index(current_leave_minute),
+                    key=leave_minute_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
 
             with cols[7]:
                 work_note = st.text_input(
                     "自社工数内容",
-                    value=entry.work_note or "",
-                    key=f"work_note_{entry.row}",
+                    value=st.session_state.get(work_note_key, entry.work_note or ""),
+                    key=work_note_key,
+                    disabled=should_disable_time,
                     label_visibility="visible" if show_labels else "collapsed",
                 )
 
-            edit_rows.append(
-                {
-                    "row": entry.row,
-                    "leave_type": leave_type,
-                    "start_hour": start_hour,
-                    "start_minute": start_minute,
-                    "end_hour": end_hour,
-                    "end_minute": end_minute,
-                    "leave_hour": leave_hour,
-                    "leave_minute": leave_minute,
-                    "work_note": work_note,
-                }
-            )
+        edit_rows.append(
+            {
+                "row": entry.row,
+                "time_row": entry.time_row,
+                "date_value": entry.date_value,
+                "weekday": entry.weekday,
+                "leave_type": leave_type,
+                "start_hour": start_hour,
+                "start_minute": start_minute,
+                "end_hour": end_hour,
+                "end_minute": end_minute,
+                "leave_hour": leave_hour,
+                "leave_minute": leave_minute,
+                "work_note": work_note,
+            }
+        )
 
-        submitted = st.form_submit_button("保存する", use_container_width=True)
+    has_any_row_error = any(row_has_error.values())
+
+    if has_any_row_error:
+        st.warning("赤枠の行にエラーがあります。修正してから保存してください。")
+
+    submitted = st.button(
+        "保存する",
+        use_container_width=True,
+        disabled=has_any_row_error,
+    )
 
     if submitted:
         edits = [
             attendance_service.DayEditInput(
                 row=r["row"],
+                time_row=r["time_row"],
+                date_value=r["date_value"],
+                weekday=r["weekday"],
                 leave_type=r["leave_type"],
                 start_time=_hour_minute_str_to_time_tuple(r["start_hour"], r["start_minute"]),
                 end_time=_hour_minute_str_to_time_tuple(r["end_hour"], r["end_minute"]),
@@ -232,12 +315,24 @@ def _render_edit_form(handle, attendance_data) -> None:
             for r in edit_rows
         ]
 
-        with st.spinner("保存しています..."):
-            attendance_service.save_attendance(handle, edits)
+        validation_errors = validation_service.validate_all(edits)
 
-        st.session_state["edit_mode"] = False
-        st.success("保存しました。")
-        st.rerun()
+        if validation_errors:
+            st.error("入力内容にエラーがあります。保存されていません。")
+            date_labels = {e.row: f"{e.date_value}（{e.weekday or ''}）" for e in editable_entries}
+            for err in validation_errors:
+                label = date_labels.get(err.row_index, f"{err.row_index}行目")
+                st.warning(f"{label}：{err.message}")
+        else:
+            try:
+                with st.spinner("保存しています..."):
+                    attendance_service.save_attendance(handle, edits, actor_role="general")
+            except attendance_service.LockedError as e:
+                st.error(str(e))
+            else:
+                st.session_state["edit_mode"] = False
+                st.success("保存しました。")
+                st.rerun()
 
 
 # ============================================
