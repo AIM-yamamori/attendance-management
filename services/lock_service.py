@@ -12,6 +12,9 @@ locksテーブルのレコードライフサイクル（基本設計書4.3.2節�
   （is_locked=1, locked_at更新）。
 - 「個別に解除」実行時：該当レコードをUPDATE（is_locked=0,
   unlocked_at更新）。レコード自体は削除しない。
+
+ロックの解除は個別解除のみとする（要件定義書4.8節）。一括解除機能は
+設けない。
 """
 
 from dataclasses import dataclass
@@ -59,7 +62,7 @@ def is_locked(target_month: str, employee_id: str) -> bool:
 
 def lock_all(target_month: str) -> int:
     """
-    まとめてロック（SC-05）。
+    まとめてロック（SC-05、要件定義書4.8節）。
     対象月の全ユーザーについて、レコードが存在しなければINSERT
     （is_locked=1）、存在すればUPDATE（is_locked=1, locked_at更新）
     （基本設計書4.3.2節）。
@@ -108,9 +111,10 @@ def lock_one(target_month: str, employee_id: str) -> bool:
 
 def unlock_one(target_month: str, employee_id: str) -> bool:
     """
-    個別解除（SC-05の行単位「解除」ボタン）。
+    個別解除（SC-05の行単位「解除」ボタン、要件定義書4.8節）。
     該当レコードをUPDATE（is_locked=0, unlocked_at更新）。
     レコード自体は削除しない（基本設計書4.3.2節）。
+    ロックの解除は個別解除のみとする（一括解除機能は設けない）。
     """
     now = _now()
     with db_adapter.get_cursor(commit=True) as cur:

@@ -43,12 +43,6 @@ def _format_plain(value) -> str:
 def _render_preview_table(attendance_data) -> None:
     """
     読み取り専用のプレビューテーブルを表示する（基本設計書3.5.3節）。
-
-    日付が存在しない行（月末超過分等、Excelテンプレートの31日分確保用の
-    空行）はそもそもテーブルに含めない。これは attendance_service 側で
-    対象月の実日数分しか date_value が埋まらない設計になっているため、
-    ここで除外すれば「存在しない日付」が表示されることはない
-    （ダミーの31日分埋めは行わない）。
     """
     st.subheader("勤怠データ（プレビュー）")
 
@@ -88,6 +82,24 @@ def _render_preview_table(attendance_data) -> None:
             "合計欄などの自動計算項目もあわせて表示しています。"
             "編集画面ではこれらは表示されません（基本設計書3.5.3節）。"
         )
+
+        st.markdown("**合計**")
+        totals = attendance_data.totals
+        totals_row = [
+            {
+                "定時": _format_time(totals.scheduled_total),
+                "休憩1": _format_time(totals.break_time_1_total),
+                "休憩2": _format_time(totals.break_time_2_total),
+                "休憩3": _format_time(totals.break_time_3_total),
+                "離業": _format_time(totals.leave_time_total),
+                "実働": _format_time(totals.actual_work_time_total),
+                "超勤": _format_time(totals.overtime_total),
+                "休出": _format_time(totals.holiday_work_total),
+                "超勤+休出": _format_time(totals.overtime_plus_holiday_total),
+                "深夜": _format_time(totals.late_night_total),
+            }
+        ]
+        st.dataframe(totals_row, use_container_width=True, hide_index=True)
 
 
 _HOUR_OPTIONS = ["未入力"] + [str(h) for h in range(24)]

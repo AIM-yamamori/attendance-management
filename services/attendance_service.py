@@ -154,12 +154,48 @@ class DayEntry:
 
 
 @dataclass
+class AttendanceTotals:
+    """
+    月末合計欄（原本シート42・43行目相当）。基本設計書には明記されて
+    いないが、要件定義書7.3節「合計欄」に対応する項目。
+
+    Excel側は42行目・43行目に SUM 数式が入っているが、実働時間等の
+    自動計算項目と同様、保存直後は数式キャッシュが古いままになる
+    問題があるため、Python側で日別のDayEntry（自動計算済み）から
+    再集計する（Excelファイル自体の数式・書式には一切触れない）。
+
+    Q42 定時 = AF42(実働合計) - AI43(超勤+休日出勤合計)
+    T42 休憩時間1合計 = 各日の休憩時間1（DayEntry.break_time_1）の合計
+    W42 休憩時間2合計 = 各日の休憩時間2（DayEntry.break_time_2）の合計
+    Z42 休憩時間3合計 = 各日の休憩時間3（DayEntry.break_time_3）の合計
+    AC42 離業時間合計 = 各日の離業時間（DayEntry.leave_time）の合計
+    AF42 実働時間合計 = 各日の実働時間（DayEntry.actual_work_time）の合計
+    AI42 超勤合計 = 各日の超勤（DayEntry.overtime）の合計
+    AL42 休日出勤合計 = 各日の休日出勤（DayEntry.holiday_work）の合計
+    AI43 超勤+休日出勤合計 = AI42 + AL42
+    AM42 深夜合計 = 各日の深夜（DayEntry.late_night）の合計
+    """
+    scheduled_total: Optional[tuple[int, int]]        # Q42 定時
+    break_time_1_total: Optional[tuple[int, int]]      # T42
+    break_time_2_total: Optional[tuple[int, int]]      # W42
+    break_time_3_total: Optional[tuple[int, int]]      # Z42
+    leave_time_total: Optional[tuple[int, int]]        # AC42
+    actual_work_time_total: Optional[tuple[int, int]]  # AF42
+    overtime_total: Optional[tuple[int, int]]          # AI42
+    holiday_work_total: Optional[tuple[int, int]]      # AL42
+    overtime_plus_holiday_total: Optional[tuple[int, int]]  # AI43
+    late_night_total: Optional[tuple[int, int]]        # AM42
+
+
+@dataclass
 class AttendanceData:
+    """1ユーザー・1ヶ月分の勤怠データ全体（基本設計書5.2.4節）。"""
     """1ユーザー・1ヶ月分の勤怠データ全体（基本設計書5.2.4節）。"""
     target_month: str
     employee_id: str
     header: excel_adapter.AttendanceHeaderValues
     entries: list[DayEntry]
+    totals: AttendanceTotals
 
 
 @dataclass
@@ -176,6 +212,71 @@ class DayEditInput:
     end_time: Optional[tuple[int, int]]
     leave_time: Optional[tuple[int, int]]
     work_note: str
+
+
+def _sum_time_tuples(values: list) -> Optional[tuple[int, int]]:
+    """
+    (時, 分) タプルのリストを合計する。全てNoneなら合計結果もNoneとする
+    （Excelの SUM 関数は空セルを0として扱うため、実際には1件でも値が
+    あれば合計を返すのが自然だが、月内データが全く無い場合はNoneのまま
+    「--:--」表示にする）。
+    """
+    non_none_values = [v for v in values if v is not None]
+    if not non_none_values:
+        return None
+
+    total_minutes = 0
+    for hour, minute in non_none_values:
+        total_minutes += hour * 60 + minute
+
+    sign = -1 if total_minutes < 0 else 1
+    abs_minutes = abs(total_minutes)
+    hour, minute = divmod(abs_minutes, 60)
+    return (sign * hour, minute)
+
+
+def _calc_totals(entries: list[DayEntry]) -> AttendanceTotals:
+    """
+    月内全日分のDayEntry（既に自動計算済みの値を持つ）から、
+    原本シート42・43行目相当の合計欄を再集計する。
+    """
+    break_1_total = _sum_time_tuples([e.break_time_1 for e in entries])
+    break_2_total = _sum_time_tuples([e.break_time_2 for e in entries])
+    break_3_total = _sum_time_tuples([e.break_time_3 for e in entries])
+    leave_total = _sum_time_tuples([e.leave_time for e in entries])
+    actual_work_total = _sum_time_tuples([e.actual_work_time for e in entries])
+    overtime_total = _sum_time_tuples([e.overtime for e in entries])
+    holiday_work_total = _sum_time_tuples([e.holiday_work for e in entries])
+    late_night_total = _sum_time_tuples([e.late_night for e in entries])
+
+    # AI43 = AI42（超勤合計） + AL42（休日出勤合計）
+    overtime_plus_holiday_total = _sum_time_tuples([overtime_total, holiday_work_total])
+
+    # Q42 = AF42（実働合計） - AI43（超勤+休日出勤合計）
+    if actual_work_total is None:
+        scheduled_total = None
+    else:
+        deduction = overtime_plus_holiday_total or (0, 0)
+        actual_minutes = actual_work_total[0] * 60 + actual_work_total[1]
+        deduction_minutes = deduction[0] * 60 + deduction[1]
+        diff_minutes = actual_minutes - deduction_minutes
+        sign = -1 if diff_minutes < 0 else 1
+        abs_minutes = abs(diff_minutes)
+        hour, minute = divmod(abs_minutes, 60)
+        scheduled_total = (sign * hour, minute)
+
+    return AttendanceTotals(
+        scheduled_total=scheduled_total,
+        break_time_1_total=break_1_total,
+        break_time_2_total=break_2_total,
+        break_time_3_total=break_3_total,
+        leave_time_total=leave_total,
+        actual_work_time_total=actual_work_total,
+        overtime_total=overtime_total,
+        holiday_work_total=holiday_work_total,
+        overtime_plus_holiday_total=overtime_plus_holiday_total,
+        late_night_total=late_night_total,
+    )
 
 
 # ============================================
@@ -269,48 +370,44 @@ def load_attendance(handle: WorkbookHandle) -> AttendanceData:
     """
     「原本」シートの全項目を読み取り、プレビュー用データとして返す
     （基本設計書5.2.4節）。
-
-    自動計算項目（休憩・実働・超勤・休日出勤・深夜）は、Excel側の
-    数式キャッシュ値をそのまま使うと、保存直後（openpyxlが数式を
-    評価しないため）は古い値のままになってしまう。そのため、
-    Excel側の数式定義をPython側に再現した excel_adapter.calc_auto_values
-    で都度計算した結果を使う（Excelファイル自体の数式・書式は
-    一切変更しない。表示専用の再計算）。
     """
     workbook = excel_adapter.load_workbook_from_path_for_display(handle.local_path)
 
     header = excel_adapter.read_header_values(workbook, sheet_name=excel_adapter.SHEET_HONBUN)
     day_rows = excel_adapter.read_day_rows(workbook, sheet_name=excel_adapter.SHEET_HONBUN)
 
-    entries = [
-        _day_cell_values_to_entry(d, header) for d in day_rows
-    ]
+    entries = [_day_cell_values_to_entry(d, header) for d in day_rows]
     entries = _filter_entries_to_month_days(entries, handle.target_month)
+
+    totals = _calc_totals(entries)
 
     return AttendanceData(
         target_month=handle.target_month,
         employee_id=handle.employee_id,
         header=header,
         entries=entries,
+        totals=totals,
     )
 
 
 def load_example(handle: WorkbookHandle) -> AttendanceData:
+    """「記入例」シートの全項目を、load_attendanceと同一のセル対応表で読み取る（SC-08用）。"""
     workbook = excel_adapter.load_workbook_from_path_for_display(handle.local_path)
 
     header = excel_adapter.read_header_values(workbook, sheet_name=excel_adapter.SHEET_KINYUREI)
     day_rows = excel_adapter.read_day_rows(workbook, sheet_name=excel_adapter.SHEET_KINYUREI)
 
-    entries = [
-        _day_cell_values_to_entry(d, header) for d in day_rows
-    ]
+    entries = [_day_cell_values_to_entry(d, header) for d in day_rows]
     entries = _filter_entries_to_month_days(entries, handle.target_month)
+
+    totals = _calc_totals(entries)
 
     return AttendanceData(
         target_month=handle.target_month,
         employee_id=handle.employee_id,
         header=header,
         entries=entries,
+        totals=totals,
     )
 
 
