@@ -168,63 +168,6 @@ def create_workbook_from_template(template_path: str) -> Workbook:
     return workbook
 
 
-def _copy_worksheet_contents(source_ws, target_ws) -> None:
-    """
-    シートの内容（セル値・書式・結合セル・列幅・行高・データ入力規則・
-    条件付き書式）を source_ws から target_ws へコピーする。
-
-    openpyxl は異なるワークブック間でのシートコピー用のショートカット
-    メソッドを持たないため、セル単位・シート単位でそれぞれコピーする。
-    """
-    for row in source_ws.iter_rows():
-        for cell in row:
-            target_cell = target_ws.cell(
-                row=cell.row, column=cell.column, value=cell.value
-            )
-            if cell.has_style:
-                target_cell.font = cell.font.copy()
-                target_cell.border = cell.border.copy()
-                target_cell.fill = cell.fill.copy()
-                target_cell.number_format = cell.number_format
-                target_cell.protection = cell.protection.copy()
-                target_cell.alignment = cell.alignment.copy()
-
-    # 結合セルのコピー
-    for merged_range in source_ws.merged_cells.ranges:
-        target_ws.merge_cells(str(merged_range))
-
-    # 列幅のコピー
-    for col_letter, dim in source_ws.column_dimensions.items():
-        target_ws.column_dimensions[col_letter].width = dim.width
-
-    # 行高のコピー
-    for row_idx, dim in source_ws.row_dimensions.items():
-        target_ws.row_dimensions[row_idx].height = dim.height
-
-    # シート保護設定のコピー（「記入例」シートは保護済み、要件定義書14章）
-    if source_ws.protection.sheet:
-        target_ws.protection.sheet = True
-        if source_ws.protection.password:
-            target_ws.protection.password = source_ws.protection.password
-
-    # データ入力規則（プルダウン等）のコピー。
-    # DataValidationオブジェクトは適用範囲（cells）を内部に持つため、
-    # 単純に同じインスタンスを使い回すと元シート側の定義まで
-    # 書き換わってしまう可能性がある。安全のためdeepcopyしてから
-    # 適用範囲の文字列を付け替える。
-    for dv in source_ws.data_validations.dataValidation:
-        new_dv = copy.deepcopy(dv)
-        target_ws.add_data_validation(new_dv)
-
-    # 条件付き書式のコピー。
-    # ConditionalFormattingオブジェクトも同様にdeepcopyしてから、
-    # 対象範囲ごとにルールを付け替える。
-    for cf_range in source_ws.conditional_formatting:
-        for rule in cf_range.rules:
-            new_rule = copy.deepcopy(rule)
-            target_ws.conditional_formatting.add(str(cf_range.sqref), new_rule)
-
-
 # ============================================
 # 2. 月次ファイル生成時の自動セル設定
 # ============================================
