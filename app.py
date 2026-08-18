@@ -126,34 +126,37 @@ def _run_login_navigation() -> None:
 
 
 def _render_sidebar_user_info() -> None:
-    """サイドバー上部に、ログイン中ユーザー情報とログアウトボタンを表示する。"""
+    """
+    サイドバー上部に、ログイン中ユーザー情報とログアウトボタンを表示する。
+
+    adminアカウントは氏名を持たない特殊アカウント（基本設計書4.3.1節、
+    姓・名ともに"管理者"として初期投入される）のため、display_name
+    をそのまま表示すると「管理者 管理者（admin）」のように文字列が
+    冗長になる。そのため、adminの場合は氏名を出さず「管理者」という
+    ラベルのみを表示し、一般ユーザーの場合のみ氏名・社員番号を表示する。
+    """
     user = session_service.get_current_user()
     if user is None:
         return
     with st.sidebar:
-        st.write(f"**{user.display_name}**（{user.employee_id}）")
-        st.write(f"権限：{'管理者（admin）' if user.is_admin else '一般ユーザー'}")
+        if user.is_admin:
+            st.write("**管理者**")
+        else:
+            st.write(f"**{user.display_name}**（{user.employee_id}）")
+            st.caption("一般ユーザー")
         if st.button("ログアウト", use_container_width=True):
-            # end_session() は st.session_state を丸ごとクリアする
-            # （session_service.py参照）。これにより st.navigation() が
-            # 保持していたページ選択状態等も含めてリセットされ、
-            # 直後の st.rerun() で main() が最初から実行された際に
-            # サイドバーへ前ユーザーのページ一覧が残らないようにしている。
             session_service.end_session()
             st.rerun()
         st.divider()
 
 
-def _build_navigation() -> st.navigation:
-    """
-    ログイン中ユーザーのroleに応じて、サイドバーに表示するページ一覧を組み立てる。
-    ここに含めなかったページは、サイドバーにリンクとして出てこない。
-    """
+def _build_navigation():
     user = session_service.get_current_user()
 
-    # 共通ページ（役割を問わず利用可能）
     password_page = st.Page(
-        "_pages/06_パスワード変更.py", title="パスワード変更", icon="🔑"
+        "_pages/06_パスワード変更.py",
+        title="パスワード変更",
+        icon="🔑",
     )
 
     if user is not None and user.is_admin:
@@ -165,10 +168,20 @@ def _build_navigation() -> st.navigation:
                     icon="📋",
                     default=True,
                 ),
-                st.Page("_pages/03_admin_PDF出力.py", title="PDF出力", icon="🖨️"),
-                st.Page("_pages/04_admin_ロック管理.py", title="ロック管理", icon="🔒"),
                 st.Page(
-                    "_pages/05_admin_ユーザー管理.py", title="ユーザー管理", icon="👤"
+                    "_pages/03_admin_PDF出力.py",
+                    title="PDF出力",
+                    icon="🖨️",
+                ),
+                st.Page(
+                    "_pages/04_admin_ロック管理.py",
+                    title="ロック管理",
+                    icon="🔒",
+                ),
+                st.Page(
+                    "_pages/05_admin_ユーザー管理.py",
+                    title="ユーザー管理",
+                    icon="👤",
                 ),
             ],
             "アカウント": [password_page],
@@ -177,13 +190,16 @@ def _build_navigation() -> st.navigation:
         pages = {
             "業務メニュー": [
                 st.Page(
-                    "_pages/01_勤怠入力.py", title="勤怠入力・閲覧", icon="📝", default=True
+                    "_pages/01_勤怠入力.py",
+                    title="勤怠入力・閲覧",
+                    icon="📝",
+                    default=True,
                 ),
             ],
             "アカウント": [password_page],
         }
 
-    return st.navigation(pages)
+    return st.navigation(pages, position="sidebar")
 
 
 def main() -> None:
