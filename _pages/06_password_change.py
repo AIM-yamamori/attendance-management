@@ -28,6 +28,8 @@ if submitted:
     if new_password != new_password_confirm:
         st.error("新しいパスワードが一致しません")
     else:
+        # 現在パスワードの確認・新パスワードのポリシー検証は
+        # auth_service.change_password に委譲する
         ok, error_message = auth_service.change_password(
             employee_id=user.employee_id,
             current_password=current_password,

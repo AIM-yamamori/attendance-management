@@ -28,13 +28,12 @@ openpyxlを使ってExcelファイルの読み書きを行うアダプター。
 attendance_service が両者を組み合わせる）。
 """
 
-import re
-from dataclasses import dataclass
-from typing import Optional
-
-import copy
 import calendar
 import datetime
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
 
 import openpyxl
 from openpyxl.workbook.workbook import Workbook
@@ -97,6 +96,9 @@ NON_EDITABLE_RANGES = ("F11:G16", "F18:H21")
 
 # 時刻セルの形式チェック用正規表現（基本設計書7.4節）
 _TIME_PATTERN = re.compile(r"^([0-9]|1[0-9]|2[0-3]):[0-5][0-9]$")
+
+# 半休扱いの休暇種類（休憩時間1・超勤の計算で共通して参照する）
+_HALF_DAY_LEAVE_TYPES = ("午前半休", "午後半休")
 
 
 # ============================================
@@ -317,6 +319,7 @@ class DayCellValues:
     holiday_work: object
     late_night: object
 
+
 @dataclass
 class AttendanceHeaderValues:
     """勤怠表ヘッダー情報"""
@@ -530,11 +533,15 @@ def read_target_month_first_day(workbook: Workbook) -> Optional[datetime.date]:
 
     if value is None:
         return None
-    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
-        # datetime.date / datetime.datetime
-        if hasattr(value, "date"):
-            return value.date() if not isinstance(value, datetime.date) or isinstance(value, datetime.datetime) else value
+
+    if isinstance(value, datetime.date):
+        # datetime.datetime は datetime.date のサブクラスのため、
+        # 時刻部分を切り捨てて date へそろえる。純粋な datetime.date は
+        # そのまま返す。
+        if isinstance(value, datetime.datetime):
+            return value.date()
         return value
+
     if isinstance(value, str):
         match = re.match(r"^(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", value.strip())
         if match:
@@ -543,6 +550,7 @@ def read_target_month_first_day(workbook: Workbook) -> Optional[datetime.date]:
                 return datetime.date(year, month, day)
             except ValueError:
                 return None
+
     return None
 
 
@@ -575,48 +583,32 @@ def calc_date_for_row(target_month_first_day: datetime.date, row: int) -> Option
 
 def read_header_values(
     workbook: Workbook,
-    sheet_name: str = SHEET_HONBUN
+    sheet_name: str = SHEET_HONBUN,
 ) -> AttendanceHeaderValues:
     """
     表外の勤怠情報を読み取る。
 
     日次データ(DayCellValues)には含めない。
     """
-
     ws = workbook[sheet_name]
 
     return AttendanceHeaderValues(
-
         client_company_name=ws["O4"].value,
-
         client_department=ws["AH4"].value,
-
-
         employee_id=ws["O5"].value,
-
         employee_name=ws["AH5"].value,
-
-
         night_start_time=ws["D10"].value,
-
-
         scheduled_work_time=ws["G11"].value,
-
-
         morning_time=ws["G13"].value,
-
         afternoon_time=ws["G15"].value,
-
-
         break_time_1_start=ws["G19"].value,
         break_time_1_end=ws["H19"].value,
-
         break_time_2_start=ws["G20"].value,
         break_time_2_end=ws["H20"].value,
-
         break_time_3_start=ws["G21"].value,
         break_time_3_end=ws["H21"].value,
     )
+
 
 def format_time_value_no_seconds(value) -> str:
     """
@@ -660,15 +652,24 @@ def _time_tuple_to_decimal_hours(value: Optional[tuple[int, int]]) -> Optional[f
 
 
 def _decimal_hours_to_time_tuple(value: Optional[float]) -> Optional[tuple[int, int]]:
-    """小数表現の時間を (時, 分) タプルに戻す（表示用）。負値もそのまま許容する。"""
+    """
+    小数表現の時間を (時, 分) タプルに戻す（表示用）。負値もそのまま許容する。
+
+    符号は「時」側にのみ乗せる（例：-1.5 → (-1, 30)）。
+    ちょうど0時間台の負値（例：-0.5 → 0時間30分のマイナス）は
+    時が0になり符号を表現できないため、そのようなケースでは
+    分だけそのまま返す（呼び出し側の表示関数 _format_time が
+    hour<0かどうかで負表示を判定する仕様のため、0時間台の負値は
+    現状「マイナス」であることを明示できない既知の制約）。
+    """
     if value is None:
         return None
     sign = -1 if value < 0 else 1
     total_minutes = round(abs(value) * 60)
     hour, minute = divmod(total_minutes, 60)
-    return (sign * hour if hour != 0 else (0 if sign > 0 else -0), minute) if False else (
-        (sign * hour, minute) if sign < 0 or hour > 0 else (0, minute)
-    )
+    if sign < 0 or hour > 0:
+        return (sign * hour, minute)
+    return (0, minute)
 
 
 @dataclass
@@ -748,7 +749,7 @@ def calc_auto_values(
     # ------------------------------------------------
     # 休憩時間1（区間交差計算）
     # ------------------------------------------------
-    if leave_type in ("午前半休", "午後半休"):
+    if leave_type in _HALF_DAY_LEAVE_TYPES:
         break_1_decimal = 0.0
     elif start is None or end is None:
         break_1_decimal = None  # Excel側は "" だが、ここではNoneで「未計算」を表す
@@ -782,7 +783,7 @@ def calc_auto_values(
     # ------------------------------------------------
     # 超勤：所定労働時間と実働時間の差。実働が所定に足りなければマイナス。
     # ------------------------------------------------
-    if leave_type in ("午前半休", "午後半休"):
+    if leave_type in _HALF_DAY_LEAVE_TYPES:
         overtime_decimal = 0.0
     elif leave_type == "休日出勤":
         overtime_decimal = None
@@ -883,3 +884,89 @@ def load_workbook_from_path_for_display(path: str) -> Workbook:
 def save_workbook_to_path(workbook: Workbook, path: str) -> None:
     """ワークブックを指定パスへ保存する。"""
     workbook.save(path)
+
+
+def read_example_sheet(excel_path: str | Path) -> list[list[str]]:
+    """
+    Excelファイルの「記入例」シートを読み取り、
+    Streamlitで表示しやすい2次元リストとして返す。
+
+    Args:
+        excel_path:
+            読み取るExcelファイルのパス。
+
+    Returns:
+        セルの値を文字列化した2次元リスト。
+
+    Raises:
+        FileNotFoundError:
+            Excelファイルが存在しない場合。
+        ValueError:
+            「記入例」シートが存在しない場合。
+    """
+    path = Path(excel_path)
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Excelファイルが見つかりません: {path}"
+        )
+
+    workbook = openpyxl.load_workbook(
+        filename=path,
+        read_only=True,
+        data_only=False,
+    )
+
+    try:
+        if SHEET_KINYUREI not in workbook.sheetnames:
+            raise ValueError(
+                f"「{SHEET_KINYUREI}」シートが見つかりません"
+            )
+
+        sheet = workbook[SHEET_KINYUREI]
+
+        return [
+            [
+                "" if cell.value is None else str(cell.value)
+                for cell in row
+            ]
+            for row in sheet.iter_rows()
+        ]
+
+    finally:
+        workbook.close()
+
+
+def load_example_sheet_for_display(
+    excel_path: str | Path,
+) -> list[DayCellValues]:
+    """
+    Excelファイルの「記入例」シートを、
+    勤怠データ（プレビュー）と同じ形式で読み込む。
+
+    読み取り専用。
+    数式セルについては data_only=True でExcelに保存されている
+    計算結果を取得する。
+    """
+    path = Path(excel_path)
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Excelファイルが見つかりません: {path}"
+        )
+
+    workbook = load_workbook_from_path_for_display(path)
+
+    try:
+        if SHEET_KINYUREI not in workbook.sheetnames:
+            raise ValueError(
+                f"「{SHEET_KINYUREI}」シートが見つかりません"
+            )
+
+        return read_day_rows(
+            workbook,
+            sheet_name=SHEET_KINYUREI,
+        )
+
+    finally:
+        workbook.close()

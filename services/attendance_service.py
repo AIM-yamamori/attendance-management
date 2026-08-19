@@ -190,7 +190,6 @@ class AttendanceTotals:
 @dataclass
 class AttendanceData:
     """1ユーザー・1ヶ月分の勤怠データ全体（基本設計書5.2.4節）。"""
-    """1ユーザー・1ヶ月分の勤怠データ全体（基本設計書5.2.4節）。"""
     target_month: str
     employee_id: str
     header: excel_adapter.AttendanceHeaderValues
@@ -366,49 +365,42 @@ def _create_new_monthly_workbook(
 # データの読み取り（プレビュー・記入例ヘルプ共通）
 # ============================================
 
+def _load_attendance_from_sheet(handle: WorkbookHandle, sheet_name: str) -> AttendanceData:
+    """
+    指定シート（「原本」または「記入例」）の全項目を読み取り、
+    表示用データとして返す共通処理（load_attendance / load_example から
+    使う。両者はどのシートを読むか以外の処理は完全に同じ）。
+    """
+    workbook = excel_adapter.load_workbook_from_path_for_display(handle.local_path)
+
+    header = excel_adapter.read_header_values(workbook, sheet_name=sheet_name)
+    day_rows = excel_adapter.read_day_rows(workbook, sheet_name=sheet_name)
+
+    entries = [_day_cell_values_to_entry(d, header) for d in day_rows]
+    entries = _filter_entries_to_month_days(entries, handle.target_month)
+
+    totals = _calc_totals(entries)
+
+    return AttendanceData(
+        target_month=handle.target_month,
+        employee_id=handle.employee_id,
+        header=header,
+        entries=entries,
+        totals=totals,
+    )
+
+
 def load_attendance(handle: WorkbookHandle) -> AttendanceData:
     """
     「原本」シートの全項目を読み取り、プレビュー用データとして返す
     （基本設計書5.2.4節）。
     """
-    workbook = excel_adapter.load_workbook_from_path_for_display(handle.local_path)
-
-    header = excel_adapter.read_header_values(workbook, sheet_name=excel_adapter.SHEET_HONBUN)
-    day_rows = excel_adapter.read_day_rows(workbook, sheet_name=excel_adapter.SHEET_HONBUN)
-
-    entries = [_day_cell_values_to_entry(d, header) for d in day_rows]
-    entries = _filter_entries_to_month_days(entries, handle.target_month)
-
-    totals = _calc_totals(entries)
-
-    return AttendanceData(
-        target_month=handle.target_month,
-        employee_id=handle.employee_id,
-        header=header,
-        entries=entries,
-        totals=totals,
-    )
+    return _load_attendance_from_sheet(handle, excel_adapter.SHEET_HONBUN)
 
 
 def load_example(handle: WorkbookHandle) -> AttendanceData:
     """「記入例」シートの全項目を、load_attendanceと同一のセル対応表で読み取る（SC-08用）。"""
-    workbook = excel_adapter.load_workbook_from_path_for_display(handle.local_path)
-
-    header = excel_adapter.read_header_values(workbook, sheet_name=excel_adapter.SHEET_KINYUREI)
-    day_rows = excel_adapter.read_day_rows(workbook, sheet_name=excel_adapter.SHEET_KINYUREI)
-
-    entries = [_day_cell_values_to_entry(d, header) for d in day_rows]
-    entries = _filter_entries_to_month_days(entries, handle.target_month)
-
-    totals = _calc_totals(entries)
-
-    return AttendanceData(
-        target_month=handle.target_month,
-        employee_id=handle.employee_id,
-        header=header,
-        entries=entries,
-        totals=totals,
-    )
+    return _load_attendance_from_sheet(handle, excel_adapter.SHEET_KINYUREI)
 
 
 def _filter_entries_to_month_days(entries: list[DayEntry], target_month: str) -> list[DayEntry]:

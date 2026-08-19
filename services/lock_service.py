@@ -65,7 +65,8 @@ def lock_all(target_month: str) -> int:
     まとめてロック（SC-05、要件定義書4.8節）。
     対象月の全ユーザーについて、レコードが存在しなければINSERT
     （is_locked=1）、存在すればUPDATE（is_locked=1, locked_at更新）
-    （基本設計書4.3.2節）。
+    （基本設計書4.3.2節）。lock_oneと同じUPSERT文を全ユーザー分
+    繰り返す形になっている。
 
     戻り値：対象件数（ロック対象としたユーザー数）
     """

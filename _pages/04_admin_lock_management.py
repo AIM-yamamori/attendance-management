@@ -54,6 +54,7 @@ st.divider()
 
 @st.dialog("まとめてロックの確認")
 def _confirm_lock_all():
+    """まとめてロック実行前の確認ダイアログ。誤操作防止のため一段挟む。"""
     st.write(
         f"{attendance_service.format_month_label(target_month)} の"
         "全ユーザーをロックします。よろしいですか？"
@@ -69,6 +70,7 @@ def _confirm_lock_all():
             st.rerun()
 
 
+# ダイアログ経由で一括ロックした直後に、結果件数を1回だけ表示する
 if st.session_state.get("lock_all_result") is not None:
     st.success(f"{st.session_state['lock_all_result']}名をロックしました。")
     st.session_state["lock_all_result"] = None
@@ -111,6 +113,7 @@ else:
             else:
                 st.success("● 未ロック", icon="🔓")
         with row_col4:
+            # 現在の状態と逆の操作のみを表示する（ロック中→解除、未ロック→ロック）
             if status.is_locked:
                 if st.button("解除", key=f"unlock_{status.employee_id}", use_container_width=True):
                     lock_service.unlock_one(target_month, status.employee_id)

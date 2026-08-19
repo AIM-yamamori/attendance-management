@@ -154,7 +154,7 @@ def _build_navigation():
     user = session_service.get_current_user()
 
     password_page = st.Page(
-        "_pages/06_パスワード変更.py",
+        "_pages/06_password_change.py",
         title="パスワード変更",
         icon="🔑",
     )
@@ -163,23 +163,23 @@ def _build_navigation():
         pages = {
             "業務メニュー": [
                 st.Page(
-                    "_pages/02_admin_勤怠編集.py",
+                    "_pages/02_admin_attendance_edit.py",
                     title="勤怠閲覧・編集",
                     icon="📋",
                     default=True,
                 ),
                 st.Page(
-                    "_pages/03_admin_PDF出力.py",
+                    "_pages/03_admin_pdf_export.py",
                     title="PDF出力",
                     icon="🖨️",
                 ),
                 st.Page(
-                    "_pages/04_admin_ロック管理.py",
+                    "_pages/04_admin_lock_management.py",
                     title="ロック管理",
                     icon="🔒",
                 ),
                 st.Page(
-                    "_pages/05_admin_ユーザー管理.py",
+                    "_pages/05_admin_user_management.py",
                     title="ユーザー管理",
                     icon="👤",
                 ),
@@ -190,7 +190,7 @@ def _build_navigation():
         pages = {
             "業務メニュー": [
                 st.Page(
-                    "_pages/01_勤怠入力.py",
+                    "_pages/01_attendance_input.py",
                     title="勤怠入力・閲覧",
                     icon="📝",
                     default=True,

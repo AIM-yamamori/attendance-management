@@ -67,6 +67,7 @@ with st.form("create_user_form", clear_on_submit=True):
     create_submitted = st.form_submit_button("追加する")
 
 if create_submitted:
+    # バリデーション・重複チェック等は user_service.create_user に委譲する
     ok, error_message = user_service.create_user(
         last_name=new_last_name,
         first_name=new_first_name,
@@ -100,6 +101,7 @@ else:
     edit_target_user = user_service.get_user(edit_target_employee_id)
 
     with st.form("update_user_form"):
+        # 社員番号はログインIDを兼ねるため編集不可（表示のみ）
         st.caption(f"社員番号（ログインID）: {edit_target_user.employee_id}（変更不可）")
         edit_last_name = st.text_input("姓", value=edit_target_user.last_name)
         edit_first_name = st.text_input("名", value=edit_target_user.first_name)
@@ -146,7 +148,7 @@ else:
             )
             if ok:
                 # 設定直後の確認表示のみ（要件定義書5.4節）。
-                # 以後この画面上には表示しない。
+                # 以後この画面上には表示しない（session_stateに保持しない）。
                 st.success(
                     f"{target_label} のパスワードを再設定しました。"
                     f"新パスワード「{new_password}」を本人へ直接伝えてください。"

@@ -93,6 +93,8 @@ st.checkbox(
 
 st.divider()
 
+# 各ユーザーの個別チェックボックス。初回表示時のみ session_state を
+# False で初期化する（2回目以降はユーザーの選択状態を保持するため）。
 for u in all_users:
     key = f"pdf_check_{u.employee_id}"
     if key not in st.session_state:
@@ -126,6 +128,7 @@ if generate_clicked:
     try:
         with st.spinner("PDFを生成しています..."):
             if len(selected_employee_ids) == 1:
+                # 1名選択時：PDFを直接ダウンロード対象にする
                 employee_id = selected_employee_ids[0]
                 pdf_bytes = pdf_service.generate_pdf(employee_id, target_month)
                 file_name = pdf_service.build_pdf_file_name(employee_id, target_month)
@@ -134,6 +137,7 @@ if generate_clicked:
                 st.session_state["pdf_output_file_name"] = file_name
                 st.session_state["pdf_output_mime"] = "application/pdf"
             else:
+                # 複数名選択時：まとめてZIP化してダウンロード対象にする
                 zip_bytes = pdf_service.generate_zip(selected_employee_ids, target_month)
                 zip_file_name = f"勤務実績管理表_{target_month}.zip"
 
