@@ -1,5 +1,5 @@
 """
-02_admin_勤怠編集.py
+02_admin_attendance_edit.py
 
 【概要】
 管理者用の勤怠閲覧・編集画面（SC-03）。要件定義書7.5節・4.5節、
@@ -16,15 +16,36 @@
 常に行える。
 
 【編集フォームのUI方針】
-一般ユーザー用の編集フォーム（01_勤怠入力.py）と同一方針。
+一般ユーザー用の編集フォーム（01_attendance_input.py）と同一方針。
 - 1日1行に、日・曜日・休暇種類・始業・終業・離業・自社工数内容を
   すべて並べる（日付列は「日」「曜日」のみ）。
 - 時刻入力は "H:MM" 形式のテキストボックス1つに統一し、入力の都度
   形式チェックを行う（プルダウンは使わない）。
+- 時刻テキスト入力は on_change のたびにサーバー側でサニタイズする
+  （全角数字・全角コロンは半角へ自動変換し、数字とコロン以外の文字は
+  除去する）。ブラウザのキー入力段階で物理的にブロックすることは
+  st.text_input単体ではできないため、「入力した直後の再描画で
+  不正な文字が自動的に消える／半角化される」という体験になる。
+
+  【StreamlitAPIException対策】
+  on_changeでsession_state[key]を書き換えるウィジェットには、
+  st.text_input(value=..., key=...) のように value と key を同時に
+  渡してはいけない（"created with a default value but also had its
+  value set via the Session State API" という警告/例外の原因になる）。
+  そのため、ウィジェット生成前に st.session_state[key] が未設定なら
+  ここで初期値を代入し、st.text_input呼び出し時は key のみを渡す
+  （value引数は渡さない）方式に統一する。
+
+【ヘルプ（記入例）表示の方針】
+01_attendance_input.pyと同様、attendance_service.load_example を使う。
+自動計算列（休憩・実働・超勤等）もPython側で正しく再計算した
+AttendanceDataを返すため、プレビュー画面と完全に同じ精度で
+記入例を表示できる。
 """
 
 import datetime
 import re
+import unicodedata
 
 import streamlit as st
 
@@ -57,13 +78,12 @@ def _format_time(value) -> str:
     return f"{hour}:{minute:02d}"
 
 
-def _build_preview_rows(attendance_data) -> list[dict]:
+def _build_entry_rows(entries) -> list[dict]:
     """
-    プレビューテーブル用の行データを組み立てる。
-    一般ユーザー用・admin用いずれのプレビューでも同じ形式を使う。
+    DayEntryのリストから、プレビュー・記入例表示共通の行データを組み立てる。
     """
     rows = []
-    for entry in attendance_data.entries:
+    for entry in entries:
         if entry.date_value is None:
             continue
 
@@ -114,7 +134,7 @@ def _render_admin_preview_table(attendance_data) -> None:
     """
     st.subheader("勤怠データ（プレビュー）")
 
-    table_rows = _build_preview_rows(attendance_data)
+    table_rows = _build_entry_rows(attendance_data.entries)
 
     if not table_rows:
         st.info("この月のデータはまだありません。")
@@ -130,45 +150,18 @@ def _render_admin_preview_table(attendance_data) -> None:
     st.dataframe(_build_totals_row(attendance_data), use_container_width=True, hide_index=True)
 
 
-def _render_example_table(example_entries) -> None:
+def _render_example_table(example_data) -> None:
     """
-    「記入例」シートを勤怠データ（プレビュー）と同じ
-    レイアウト・表示形式で表示する。
+    「記入例」シートを、勤怠データ（プレビュー）と同じ
+    レイアウト・表示形式（自動計算列込み）で表示する（要件定義書7.4節）。
     """
-    table_rows = []
-
-    for entry in example_entries:
-        if entry.date_value is None:
-            continue
-
-        table_rows.append(
-            {
-                "日": entry.date_value,
-                "曜日": entry.weekday or "",
-                "休暇種類": entry.leave_type or "",
-                "始業": _format_time(entry.start_time),
-                "終業": _format_time(entry.end_time),
-                "休憩1": _format_time(entry.break_time_1),
-                "休憩2": _format_time(entry.break_time_2),
-                "休憩3": _format_time(entry.break_time_3),
-                "離業": _format_time(entry.leave_time),
-                "実働": _format_time(entry.actual_work_time),
-                "超勤": _format_time(entry.overtime),
-                "休出": _format_time(entry.holiday_work),
-                "深夜": _format_time(entry.late_night),
-                "自社工数内容": entry.work_note or "",
-            }
-        )
+    table_rows = _build_entry_rows(example_data.entries)
 
     if not table_rows:
         st.info("記入例シートに表示する内容がありません。")
         return
 
-    st.dataframe(
-        table_rows,
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.dataframe(table_rows, use_container_width=True, hide_index=True)
 
 
 # ============================================
@@ -179,6 +172,24 @@ def _render_example_table(example_entries) -> None:
 # excel_adapter.validate_excel_time_string と同一の形式を採用し、
 # 画面側とExcel保存側で許容形式を一致させる。
 _TIME_INPUT_PATTERN = re.compile(r"^([0-9]|1[0-9]|2[0-3]):[0-5][0-9]$")
+
+# サニタイズ後に残してよい文字（半角数字・半角コロンのみ）
+_ALLOWED_CHAR_PATTERN = re.compile(r"[0-9:]")
+
+
+def _sanitize_time_input_text(text: str) -> str:
+    """
+    時刻入力欄のon_changeで呼ぶサニタイズ処理。
+    01_attendance_input.py と同一ロジック（詳細はそちらのdocstring参照）。
+
+    - 全角数字（０-９）・全角コロン（：）は unicodedata.normalize の
+      NFKC正規化で半角に変換される。
+    - 変換後、半角数字・半角コロン以外の文字はすべて除去する。
+    """
+    if not text:
+        return text
+    normalized = unicodedata.normalize("NFKC", text)
+    return "".join(ch for ch in normalized if _ALLOWED_CHAR_PATTERN.match(ch))
 
 
 def _time_tuple_to_input_text(value) -> str:
@@ -211,28 +222,48 @@ def _parse_time_input_text(text: str):
     return (int(hour_str), int(minute_str)), True
 
 
+def _make_sanitize_callback(text_key: str):
+    """
+    st.text_input の on_change に渡すコールバックを、対象ウィジェットの
+    keyを束縛した形で生成する。on_changeはコールバック引数を取れないため、
+    クロージャでtext_keyを固定する。
+    """
+
+    def _callback():
+        current = st.session_state.get(text_key, "")
+        st.session_state[text_key] = _sanitize_time_input_text(current)
+
+    return _callback
+
+
 def _render_time_text_input(row_key: str, field_prefix: str, label: str, entry_time_value, disabled: bool, label_visibility: str):
     """
     始業・終業・離業共通の "H:MM" 形式テキスト入力を描画する。
     session_stateのキーには "admin_" プレフィックスを付け、
-    一般ユーザー画面（01_勤怠入力.py）のキーと衝突しないようにする。
+    一般ユーザー画面（01_attendance_input.py）のキーと衝突しないようにする。
+
+    st.text_input に value と key を同時に渡すと、on_changeで
+    session_stateを書き換えるウィジェットの場合に
+    StreamlitAPIException（"created with a default value but also
+    had its value set via the Session State API"）が発生する。
+    そのため、session_stateにまだキーが無い場合のみここで初期値を
+    書き込み、st.text_input呼び出し時は value を渡さず key のみで
+    値を委ねる（Session State一本化）。
 
     戻り値: (入力文字列, パース済みtime_tupleまたはNone, 形式が妥当か)
     """
     text_key = f"admin_{field_prefix}_text_{row_key}"
 
-    if text_key in st.session_state:
-        current_text = st.session_state[text_key]
-    else:
-        current_text = _time_tuple_to_input_text(entry_time_value)
+    if text_key not in st.session_state:
+        st.session_state[text_key] = _time_tuple_to_input_text(entry_time_value)
 
     input_text = st.text_input(
         label,
-        value=current_text,
         key=text_key,
         disabled=disabled,
         placeholder="　　:　　",
         label_visibility=label_visibility,
+        on_change=_make_sanitize_callback(text_key),
     )
 
     time_tuple, is_valid = _parse_time_input_text(input_text)
@@ -243,7 +274,7 @@ def _render_admin_edit_form(handle, attendance_data, target_employee, target_mon
     """
     admin用の編集フォームを表示する（基本設計書3.6節・8.3節）。
 
-    一般ユーザー用の編集フォーム（01_勤怠入力.py）と同様、
+    一般ユーザー用の編集フォーム（01_attendance_input.py）と同様、
     要件定義書4.6節に基づくリアルタイムバリデーション
     （休暇区分・土日の時刻入力制御と行ハイライト）を適用する。
     保存時は actor_role="admin" を渡し、保存直前チェックは
@@ -261,7 +292,8 @@ def _render_admin_edit_form(handle, attendance_data, target_employee, target_mon
     )
     st.caption(
         "始業・終業・離業は「9:00」のように半角数字とコロンで入力してください"
-        "（時：0〜23、分：0〜59）。未入力の場合は空欄のままにしてください。"
+        "（時：0〜23、分：0〜59）。全角で入力しても自動的に半角へ変換されます。"
+        "未入力の場合は空欄のままにしてください。"
     )
 
     editable_entries = [e for e in attendance_data.entries if e.date_value is not None]
@@ -494,14 +526,9 @@ with status_col2:
 
 with status_col3:
     if st.button("ヘルプ", use_container_width=True):
-        st.session_state["admin_show_help"] = not st.session_state.get(
-            "admin_show_help",
-            False,
-        )
+        st.session_state["admin_show_help"] = not st.session_state.get("admin_show_help", False)
 
 st.divider()
-
-
 
 with st.spinner("勤怠データを読み込んでいます..."):
     handle = attendance_service.get_or_create_monthly_file(
@@ -516,35 +543,20 @@ with st.spinner("勤怠データを読み込んでいます..."):
 header = attendance_data.header
 
 # ============================================
-# ヘルプ表示
-# ============================================
-# ============================================
-# ヘルプ表示
+# ヘルプ表示（記入例シート。attendance_service.load_example経由）
 # ============================================
 if st.session_state.get("admin_show_help", False):
     st.divider()
-
     st.subheader("📖 記入例")
 
     try:
-        example_entries = excel_adapter.load_example_sheet_for_display(
-            handle.local_path
-        )
-
-        _render_example_table(example_entries)
-
+        with st.spinner("記入例を読み込んでいます..."):
+            example_data = attendance_service.load_example(handle)
+        _render_example_table(example_data)
     except FileNotFoundError as e:
         st.error(f"記入例を読み込めませんでした。\n{e}")
-
-    except ValueError as e:
+    except (ValueError, KeyError) as e:
         st.error(f"記入例シートを読み込めませんでした。\n{e}")
-
-    except Exception as e:
-        st.error(
-            "記入例の読み込み中に予期しないエラーが発生しました。"
-        )
-        st.exception(e)
-        
 
 st.subheader("勤務情報")
 hcol1, hcol2 = st.columns(2)
