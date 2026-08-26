@@ -1,5 +1,5 @@
 """
-05_admin_ユーザー管理.py
+05_admin_user_management.py
 
 【概要】
 admin用のユーザーマスタ管理画面（SC-06）。

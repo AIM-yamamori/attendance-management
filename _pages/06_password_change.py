@@ -1,5 +1,5 @@
 """
-06_パスワード変更.py
+06_password_change.py
 
 【概要】
 一般ユーザー・admin共通のパスワード変更画面（SC-07）。
@@ -16,7 +16,8 @@ from services import auth_service, session_service
 user = session_service.require_login()
 
 st.title("パスワード変更")
-st.write(f"{user.display_name} さんのパスワードを変更します。")
+name = "管理者" if user.is_admin else user.display_name
+st.write(f"{name}さんのパスワードを変更します。")
 
 with st.form("change_password_form"):
     current_password = st.text_input("現在のパスワード", type="password")

@@ -118,7 +118,6 @@ def _render_preview_table(attendance_data) -> None:
     st.caption(
         "※プレビュー時は休憩・実働・超勤・休日出勤・深夜・深夜開始時間・"
         "合計欄などの自動計算項目もあわせて表示しています。"
-        "編集画面ではこれらは表示されません（基本設計書3.5.3節）。"
     )
 
     st.markdown("**合計**")

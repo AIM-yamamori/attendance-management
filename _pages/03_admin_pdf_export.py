@@ -1,5 +1,5 @@
 """
-03_admin_PDF出力.py
+03_admin_pdf_export.py
 
 【概要】
 管理者用のPDF出力画面（SC-04）。要件定義書7.6節・4.7節、

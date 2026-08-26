@@ -3,6 +3,14 @@ user_service.py
 
 【概要】
 ユーザーマスタCRUDを担うモジュール（基本設計書5.2.2節）。
+
+【戻り値の方針】
+create_user・update_user・delete_userはいずれも
+tuple[bool, Optional[str]]（成功したか, エラーメッセージ or None）を返す。
+呼び出し側（_pages/05_admin_user_management.py）は
+"ok, error_message = user_service.xxx(...)" という形で受け取る前提のため、
+3関数の戻り値シグネチャを統一している（以前はupdate_user・delete_userが
+bool単体を返しており、呼び出し側でのアンパックに失敗していた）。
 """
 
 from dataclasses import dataclass
@@ -95,8 +103,20 @@ def create_user(
     return True, None
 
 
-def update_user(employee_id: str, last_name: str, first_name: str, department: str) -> bool:
-    """氏名・部署名更新（パスワード・社員番号は対象外）。"""
+def update_user(
+    employee_id: str, last_name: str, first_name: str, department: str
+) -> tuple[bool, Optional[str]]:
+    """
+    氏名・部署名更新（パスワード・社員番号は対象外）。
+
+    戻り値: (成功したか, エラーメッセージ or None)
+    対象ユーザーが存在しない場合はエラーメッセージ付きでFalseを返す
+    （UPDATE自体は対象0件でもSQLite上はエラーにならず成功扱いに
+    見えてしまうため、事前にget_userで存在確認する）。
+    """
+    if get_user(employee_id) is None:
+        return False, "ユーザーが見つかりません"
+
     now = datetime.now(timezone.utc).isoformat()
     with db_adapter.get_cursor(commit=True) as cur:
         cur.execute(
@@ -106,10 +126,31 @@ def update_user(employee_id: str, last_name: str, first_name: str, department: s
             """,
             (last_name, first_name, department, now, employee_id),
         )
-    return True
+    return True, None
 
 
-def delete_user(employee_id: str) -> bool:
+def delete_user(employee_id: str) -> tuple[bool, Optional[str]]:
+    """
+    一般ユーザーを削除する。
+
+    戻り値: (成功したか, エラーメッセージ or None)
+
+    locksテーブルはemployee_idに外部キー制約（REFERENCES users(employee_id)）
+    を持っているため、対象ユーザーのlocksレコードが残った状態でusersから
+    削除しようとすると、SQLiteが外部キー制約違反（IntegrityError）を送出する。
+    ユーザー削除時はロック履歴を残す必要がない（ユーザー自体が消えるため）
+    ので、同一トランザクション内でlocksレコードを先に削除してから
+    usersレコードを削除する。
+
+    get_cursor(commit=True)の1つのwithブロック内で両方のDELETEを実行する
+    ことで、1トランザクションとして扱われる（どちらかが失敗すれば
+    両方ロールバックされ、locksだけ消えてusersが残るような中途半端な
+    状態にはならない）。
+    """
+    if get_user(employee_id) is None:
+        return False, "ユーザーが見つかりません"
+
     with db_adapter.get_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM locks WHERE employee_id = ?", (employee_id,))
         cur.execute("DELETE FROM users WHERE employee_id = ?", (employee_id,))
-    return True
+    return True, None
