@@ -1,14 +1,25 @@
 #!/bin/bash
 set -e
 
+echo "=== ENTRYPOINT START ==="
+echo "DB_PATH=$DB_PATH"
+echo "PORT=${PORT:-8080}"
+
 DB_PATH="/mnt/disks/ephemeral/app.db"
 
-# 起動時: GCSに既存バックアップがあれば復元
+echo "=== RESTORE START ==="
+
 if [ -f "$DB_PATH" ]; then
   echo "Local DB exists, skipping restore"
 else
-  litestream restore -if-replica-exists -o "$DB_PATH" "gcs://aim-kintai-sqlite-backup/app-db-backup"
+  litestream restore \
+    -if-replica-exists \
+    -o "$DB_PATH" \
+    "gcs://aim-kintai-sqlite-backup/app-db-backup"
 fi
 
-# Litestreamでレプリケーションしながらアプリを起動
-exec litestream replicate -exec "streamlit run app.py --server.port=8080 --server.address=0.0.0.0"
+echo "=== RESTORE END ==="
+echo "=== STREAMLIT START ==="
+
+exec litestream replicate \
+  -exec "streamlit run app.py --server.port=8080 --server.address=0.0.0.0"
