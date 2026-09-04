@@ -3,4 +3,3 @@ openpyxl==3.1.*
 bcrypt==4.2.*
 requests==2.32.*
 python-dotenv==1.0.*
-litestream==0.3.13

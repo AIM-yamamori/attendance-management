@@ -39,7 +39,7 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # SQLite 保存用ディレクトリ（Cloud Run のローカルディスク）
-RUN mkdir -p /data
+RUN mkdir -p /mnt/disks/ephemeral
 
 # ================================
 # Streamlit 起動は entrypoint.sh に任せる

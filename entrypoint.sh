@@ -1,11 +1,13 @@
 #!/bin/bash
 set -e
 
+DB_PATH="/mnt/disks/ephemeral/app.db"
+
 # 起動時: GCSに既存バックアップがあれば復元
-if [ -f /data/app.db ]; then
+if [ -f "$DB_PATH" ]; then
   echo "Local DB exists, skipping restore"
 else
-  litestream restore -if-replica-exists -o /data/app.db "gcs://aim-kintai-sqlite-backup/app-db-backup"
+  litestream restore -if-replica-exists -o "$DB_PATH" "gcs://aim-kintai-sqlite-backup/app-db-backup"
 fi
 
 # Litestreamでレプリケーションしながらアプリを起動
