@@ -1,5 +1,5 @@
 dbs:
-  - path: /data/app.db
+  - path: /tmp/app.db
     replicas:
       - type: gcs
         bucket: aim-kintai-sqlite-backup
