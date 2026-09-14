@@ -69,11 +69,6 @@ def _init_app() -> None:
     admin_hash = auth_service.hash_password(initial_admin_password)
     db_adapter.seed_initial_admin(admin_hash)
 
-    service_start_month = os.environ.get("SERVICE_START_MONTH", "")
-    if service_start_month:
-        db_adapter.seed_setting_if_absent("service_start_month", service_start_month)
-
-
 def _render_login_page() -> None:
     """
     ログイン画面（SC-01）の中身の描画。
