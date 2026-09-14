@@ -1,6 +1,6 @@
 # ジョブモード
 if [ "$JOB_MODE" = "shell" ]; then
-    exec /bin/bash
+  exec /bin/bash
 fi
 
 #!/bin/bash
