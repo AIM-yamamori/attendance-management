@@ -1,3 +1,8 @@
+# ジョブモード
+if [ "$JOB_MODE" = "shell" ]; then
+    exec /bin/bash
+fi
+
 #!/bin/bash
 set -e
 
