@@ -82,6 +82,59 @@ def _render_login_page() -> None:
         password = st.text_input("パスワード", type="password")
         submitted = st.form_submit_button("ログイン")
 
+    st.divider()
+
+    with st.expander("adminのパスワードを忘れた場合"):
+        st.caption(
+            "管理者用の復旧パスワードを使用して、"
+            "adminのパスワードを再設定できます。"
+        )
+
+        with st.form("admin_password_reset_form"):
+            recovery_password = st.text_input(
+                "復旧用パスワード",
+                type="password",
+            )
+
+            new_admin_password = st.text_input(
+                "新しいadminパスワード",
+                type="password",
+            )
+
+            new_admin_password_confirm = st.text_input(
+                "新しいadminパスワード（確認）",
+                type="password",
+            )
+
+            reset_submitted = st.form_submit_button(
+                "adminパスワードをリセット"
+            )
+
+        if reset_submitted:
+            if new_admin_password != new_admin_password_confirm:
+                st.error("新しいパスワードが一致しません")
+            else:
+                configured_recovery_password = os.environ.get(
+                    "ADMIN_RESET_PASSWORD",
+                    "",
+                )
+
+                success, error_message = (
+                    auth_service.reset_admin_password_by_recovery(
+                        recovery_password=recovery_password,
+                        new_password=new_admin_password,
+                        configured_recovery_password=configured_recovery_password,
+                    )
+                )
+
+                if success:
+                    st.success(
+                        "adminのパスワードをリセットしました。"
+                        "新しいパスワードでログインしてください。"
+                    )
+                else:
+                    st.error(error_message)
+
     if submitted:
         user = auth_service.authenticate(employee_id, password)
         if user is None:

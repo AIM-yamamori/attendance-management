@@ -234,3 +234,58 @@ def reset_password_by_admin(employee_id: str, new_password: str) -> tuple[bool, 
         )
 
     return True, None
+
+
+def reset_admin_password_by_recovery(
+    recovery_password: str,
+    new_password: str,
+    configured_recovery_password: str,
+) -> tuple[bool, Optional[str]]:
+    """
+    環境変数 ADMIN_RESET_PASSWORD を利用して
+    adminアカウントのパスワードを強制的に再設定する。
+
+    admin本人が現在のパスワードを忘れてログインできない場合に使用する。
+
+    戻り値:
+        (True, None)       : 成功
+        (False, エラー文) : 失敗
+    """
+
+    # 復旧用パスワードが未設定の場合
+    if not configured_recovery_password:
+        return False, "管理者パスワード復旧機能が設定されていません"
+
+    # 復旧用パスワードを確認
+    if recovery_password != configured_recovery_password:
+        return False, "復旧用パスワードが正しくありません"
+
+    # 新しいパスワードのポリシー確認
+    policy_errors = validate_password_policy(new_password)
+    if policy_errors:
+        return False, "、".join(policy_errors)
+
+    # adminアカウントの存在確認
+    with db_adapter.get_cursor() as cur:
+        cur.execute(
+            "SELECT employee_id FROM users WHERE employee_id = ?",
+            ("admin",),
+        )
+        if cur.fetchone() is None:
+            return False, "adminアカウントが見つかりません"
+
+    # 新しいパスワードをbcryptでハッシュ化
+    new_hash = hash_password(new_password)
+
+    # adminのパスワードを更新
+    with db_adapter.get_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, updated_at = ?
+            WHERE employee_id = ?
+            """,
+            (new_hash, _now_iso(), "admin"),
+        )
+
+    return True, None
