@@ -4,3 +4,4 @@ dbs:
       - type: gcs
         bucket: aim-kintai-sqlite-backup
         path: app-db-backup
+        sync-interval: 1s
