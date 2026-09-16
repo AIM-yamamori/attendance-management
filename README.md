@@ -31,8 +31,11 @@ Streamlit（Python）一体型の勤怠管理Webアプリケーション。ユ�
   - [11. データの永続化](#11-データの永続化)
     - [ローカル（Docker Compose）](#ローカルdocker-compose)
     - [本番（Google Cloud Run + Litestream）](#本番google-cloud-run--litestream)
-  - [12. よくあるトラブル](#12-よくあるトラブル)
-  - [13. 開発上の注意点](#13-開発上の注意点)
+  - [12. adminパスワードの復旧（ADMIN\_RESET\_PASSWORD）](#12-adminパスワードの復旧admin_reset_password)
+    - [仕組み](#仕組み)
+    - [重要な注意点](#重要な注意点)
+  - [13. よくあるトラブル](#13-よくあるトラブル)
+  - [14. 開発上の注意点](#14-開発上の注意点)
 
 ---
 
@@ -150,7 +153,7 @@ ONEDRIVE_TENANT_ID=
 ONEDRIVE_CLIENT_ID=
 ONEDRIVE_CLIENT_SECRET=
 ONEDRIVE_LOCAL_ROOT=./data/onedrive_local
-COMPANY_NAME=【サンプル株式会社】
+COMPANY_NAME=サンプル株式会社
 ```
 
 ### 5.2 本番構成（実OneDrive・Graph API連携）
@@ -166,7 +169,7 @@ ONEDRIVE_TENANT_ID=00000000-0000-0000-0000-000000000000
 ONEDRIVE_CLIENT_ID=11111111-1111-1111-1111-111111111111
 ONEDRIVE_CLIENT_SECRET=****************
 ONEDRIVE_LOCAL_ROOT=
-COMPANY_NAME=【株式会社サンプル】
+COMPANY_NAME=株式会社サンプル
 ```
 
 ### 5.3 各項目の詳細
@@ -183,6 +186,7 @@ COMPANY_NAME=【株式会社サンプル】
 | `ONEDRIVE_LOCAL_ROOT` | 任意 | Graph API用の4項目が未設定の場合にのみ使われる、疑似OneDriveのルートディレクトリ | 未設定時は`./data/onedrive_local` |
 | `COMPANY_NAME` | 任意（推奨） | 月次ファイル名・テンプレートファイル名の先頭に使う会社名 | 未設定時は`【会社名】`という文字列がそのままファイル名に使われてしまうため、**必ず設定すること** |
 | `PORT` | 任意（Cloud Runが自動設定） | Streamlitがリッスンするポート番号 | ローカルではDockerfile/Composeの設定に従う（未設定時のデフォルトは`8080`）。Cloud Run上ではプラットフォームが自動的に注入するため、通常は手動設定不要（3章参照） |
+| `ADMIN_RESET_PASSWORD` | 任意（推奨） | admin本人が現在のパスワードを忘れてログインできなくなった場合に使う、admin専用の復旧用パスワード | ログイン画面の「adminのパスワードを忘れた場合」から、この値を入力することで新しいadminパスワードを強制的に再設定できる（12章参照）。**この値自体はDBには保存されない**（環境変数として照合にのみ使われる）。未設定の場合はこの復旧機能自体が使用できない（「管理者パスワード復旧機能が設定されていません」エラーになる）。十分にランダムで推測されにくい長い値を設定し、`.env`にコミットしないこと |
 
 > `.env`を変更した場合は `docker compose up -d --build` （または `docker compose restart`）でコンテナに反映させること。Cloud Run環境では、環境変数の変更後に新しいリビジョンをデプロイする必要がある。
 
@@ -361,11 +365,40 @@ Cloud Run上のコンテナファイルシステム（`/tmp`含む）はイン�
 
 ---
 
-## 12. よくあるトラブル
+## 12. adminパスワードの復旧（ADMIN_RESET_PASSWORD）
+
+admin本人が通常のパスワード変更を経ずにパスワードを紛失し、ログインできなくなった場合に備えて、環境変数 `ADMIN_RESET_PASSWORD` を用いた復旧経路を用意している。
+
+### 仕組み
+
+1. `.env`（またはCloud Runの環境変数）に、復旧用のパスワードとして `ADMIN_RESET_PASSWORD` を設定しておく。
+2. ログイン画面の「adminのパスワードを忘れた場合」を開くと、以下の入力欄が表示される。
+   - 復旧用パスワード（`ADMIN_RESET_PASSWORD`と一致する値を入力する）
+   - 新しいadminパスワード
+   - 新しいadminパスワード（確認）
+3. 入力内容が正しければ、`auth_service.reset_admin_password_by_recovery()` が以下を行う。
+   - 復旧用パスワードの照合
+   - 新しいパスワードのパスワードポリシー確認（8文字以上、英大文字・英小文字・数字のうち2種類以上）
+   - 新しいパスワードをbcryptでハッシュ化し、`users`テーブルの`employee_id="admin"`レコードの`password_hash`を更新
+
+この操作はadminアカウント専用であり、一般ユーザーのパスワード復旧には使用できない（一般ユーザーのパスワード紛失時は、admin が「ユーザー管理」画面から再設定する）。
+
+### 重要な注意点
+
+- **`ADMIN_RESET_PASSWORD` の値自体はDBに保存されない。** 照合にのみ使われる環境変数であり、`users`テーブルに書き込まれるのはbcryptハッシュ化された新しいadminパスワードのみ。
+- `ADMIN_RESET_PASSWORD` が未設定（空文字列）の場合、この復旧機能自体が使用できず、「管理者パスワード復旧機能が設定されていません」というエラーになる。
+- `ADMIN_RESET_PASSWORD` は `INITIAL_ADMIN_PASSWORD`（初回起動時のみ使われる初期パスワード）とは別物であり、いつでも・何度でも使用できる。**十分にランダムで推測されにくい長い値を設定し、`.env`をリポジトリにコミットしないこと。**
+- Cloud Run環境で`ADMIN_RESET_PASSWORD`を変更・追加した場合は、新しいリビジョンをデプロイする必要がある。
+- この値を知っている人は誰でもadminパスワードを再設定できてしまうため、値の管理（誰が保持するか、どう伝達するか）は組織のルールに従って厳重に行うこと。
+
+---
+
+## 13. よくあるトラブル
 
 | 症状 | 想定原因 | 対処 |
 |---|---|---|
-| ログインできない | adminパスワードを忘れた／`INITIAL_ADMIN_PASSWORD`を変更したのに反映されない | `INITIAL_ADMIN_PASSWORD`はadminレコードが**存在しない場合のみ**投入される初期値。既にadminが存在する状態で`.env`（またはCloud Runの環境変数）を変更しても反映されない。SQLiteを直接操作するか、一度adminレコードを削除して再起動する |
+| adminがパスワードを忘れてログインできない | 通常のパスワード変更を経ずにパスワードを紛失した | ログイン画面の「adminのパスワードを忘れた場合」から、`ADMIN_RESET_PASSWORD`（環境変数）を使ってadminパスワードを再設定できる。12章参照。`ADMIN_RESET_PASSWORD`が未設定の場合はこの方法は使えない |
+| ログインできない（admin以外、または上記の復旧機能が使えない場合） | `INITIAL_ADMIN_PASSWORD`を変更したのに反映されない、等 | `INITIAL_ADMIN_PASSWORD`はadminレコードが**存在しない場合のみ**投入される初期値。既にadminが存在する状態で`.env`（またはCloud Runの環境変数）を変更しても反映されない。SQLiteを直接操作するか、一度adminレコードを削除して再起動する |
 | 勤怠入力画面で「テンプレートファイルがOneDrive上に見つかりません」 | テンプレート未配置、またはファイル名が`COMPANY_NAME`と不一致 | 6章の手順でファイル名・配置場所を確認する |
 | 記入例（ヘルプ）表示でエラーになる | テンプレートの`記入例`シート名の末尾に半角スペースがない | シート名を`記入例 `（末尾半角スペース）に修正する（6.3節参照） |
 | PDF出力が失敗する | コンテナ内にLibreOfficeが無い、または`soffice`コマンドがPATHにない | `docker compose build --no-cache` で再ビルドし、Dockerfileの`libreoffice-calc`等のインストールが成功しているか確認する |
@@ -378,10 +411,11 @@ Cloud Run上のコンテナファイルシステム（`/tmp`含む）はイン�
 
 ---
 
-## 13. 開発上の注意点
+## 14. 開発上の注意点
 
 - 画面ファイルは `pages/` ではなく **`_pages/`**（アンダースコア始まり）に配置すること。Streamlitは`pages/`ディレクトリを自動検出してサイドバーに表示してしまうため、意図的に別名にしている（詳細は`app.py`のモジュールdocstring参照）。
 - 業務ロジックは画面ファイル（`_pages/`）に書かず、`services/`層に委譲すること。
 - Excelファイルへの書き込みは、対象セルの `.value` のみを更新し、書式（罫線・条件付き書式・数式等）を絶対に崩さないこと（`adapters/excel_adapter.py`参照）。
 - 時刻入力欄は `H:MM` 形式のテキストボックス1つに統一されている（プルダウン方式ではない）。新規に時刻入力欄を追加する場合は、既存の `_render_time_text_input` パターンを踏襲すること。
 - 現時点で admin 間（同一adminの複数タブ操作等）の楽観的排他制御は未実装であることに留意（基本設計書8.4節・16章参照）。Litestreamによるレプリケーションはバックアップ・障害復旧のための仕組みであり、この排他制御の欠如を解消するものではない。
+- adminパスワード復旧機能（12章）は `auth_service.py` の `reset_admin_password_by_recovery()` が担う。`app.py`のログイン画面（`_render_login_page()`）から呼び出され、`os.environ.get("ADMIN_RESET_PASSWORD", "")`で取得した値との照合のみを行う設計であり、`db_adapter.py`側の変更は不要（既存の`change_password()` / `reset_password_by_admin()`と同様、`get_cursor(commit=True)`経由で`users.password_hash`を直接UPDATEする）。
