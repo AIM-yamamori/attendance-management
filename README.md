@@ -4,7 +4,7 @@ Streamlit（Python）一体型の勤怠管理Webアプリケーション。ユ�
 
 勤怠データ本体は月次Excelファイルとして OneDrive 上で管理し、ユーザー情報・ロック状態・システム設定は SQLite で管理する。本番環境は Google Cloud Run 上で稼働し、SQLite ファイルは Litestream により Google Cloud Storage（GCS）へ継続的にレプリケーションされる（Cloud Run のファイルシステムはリクエスト間で永続化されないため）。
 
-詳細な仕様は [`勤怠管理システム_基本設計書_v0.9.md`](./勤怠管理システム_基本設計書_v0.9.md)・要件定義書を参照。本READMEはセットアップ・起動手順に特化する。
+詳細な仕様は [`基本設計書.md ver0.9`](./doc/基本設計書.md)・要件定義書を参照。本READMEはセットアップ・起動手順に特化する。
 
 ---
 
@@ -160,7 +160,7 @@ ONEDRIVE_TENANT_ID=
 ONEDRIVE_CLIENT_ID=
 ONEDRIVE_CLIENT_SECRET=
 ONEDRIVE_LOCAL_ROOT=./data/onedrive_local
-COMPANY_NAME=サンプル株式会社
+COMPANY_NAME=【サンプル株式会社】
 ```
 
 > 上記の`DB_PATH=./data/app.db`は、Dockerを使わないローカル起動（10章）向けの値。Docker経由（`entrypoint.sh`）で起動する場合、`DB_PATH`が`litestream.yml`の`path`（`/tmp/app.db`）と食い違うとバックアップが取得されないため、`/tmp/app.db`のままにするか、`litestream.yml`側も揃えること（8章参照）。
@@ -179,7 +179,7 @@ ONEDRIVE_TENANT_ID=00000000-0000-0000-0000-000000000000
 ONEDRIVE_CLIENT_ID=11111111-1111-1111-1111-111111111111
 ONEDRIVE_CLIENT_SECRET=****************
 ONEDRIVE_LOCAL_ROOT=
-COMPANY_NAME=株式会社サンプル
+COMPANY_NAME=【株式会社サンプル】
 ```
 
 ### 5.3 各項目の詳細
