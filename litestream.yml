@@ -1,0 +1,7 @@
+dbs:
+  - path: /tmp/app.db
+    replicas:
+      - type: gcs
+        bucket: aim-kintai-sqlite-backup
+        path: app-db-backup
+        sync-interval: 60s

@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data   # SQLiteファイル（app.db）の永続化
+    restart: unless-stopped   # 常時稼働の前提（要件定義書1.4節・基本設計書2.3節）
