@@ -9,7 +9,7 @@ validation_service.py
 7.1節 ルール一覧：
 VAL-01: date is None and leave_type is not None
 VAL-02: date is None and (start_time is not None or end_time is not None)
-VAL-03: leave_type in [有休,長期連休,特別休暇,欠勤,振替休暇]
+VAL-03: leave_type in [有休,長期連休,特別休暇,欠勤,振替休暇,休日]
         and (start_time is not None or end_time is not None)
 VAL-04/05: weekday in [土,日] and leave_type is None
         and (start_time is not None or end_time is not None)
@@ -19,8 +19,8 @@ VAL-04/05: weekday in [土,日] and leave_type is None
 from dataclasses import dataclass
 from typing import Optional
 
-# 7.1節 VAL-03 対象の休暇種類（この5種類のみ。半休2種は対象外）
-FULL_DAY_LEAVE_TYPES = ("有休", "長期連休", "特別休暇", "欠勤", "振替休暇")
+# 7.1節 VAL-03 対象の休暇種類（この6種類のみ。半休2種は対象外）
+FULL_DAY_LEAVE_TYPES = ("有休", "長期連休", "特別休暇", "欠勤", "振替休暇","休日")
 
 
 @dataclass
