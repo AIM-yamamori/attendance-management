@@ -219,18 +219,26 @@ def _sum_time_tuples(values: list) -> Optional[tuple[int, int]]:
     （Excelの SUM 関数は空セルを0として扱うため、実際には1件でも値が
     あれば合計を返すのが自然だが、月内データが全く無い場合はNoneのまま
     「--:--」表示にする）。
+    マイナス時間も正しく集計する。
     """
     non_none_values = [v for v in values if v is not None]
+
     if not non_none_values:
         return None
 
     total_minutes = 0
+
     for hour, minute in non_none_values:
-        total_minutes += hour * 60 + minute
+        if hour < 0:
+            total_minutes -= abs(hour) * 60 + minute
+        else:
+            total_minutes += hour * 60 + minute
 
     sign = -1 if total_minutes < 0 else 1
     abs_minutes = abs(total_minutes)
+
     hour, minute = divmod(abs_minutes, 60)
+
     return (sign * hour, minute)
 
 
