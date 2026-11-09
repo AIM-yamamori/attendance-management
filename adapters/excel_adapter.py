@@ -89,6 +89,18 @@ COL_OVERTIME = "AI"            # 超勤（超過勤務）
 COL_HOLIDAY_WORK = "AL"        # 休日出勤
 COL_LATE_NIGHT = "AM"          # 深夜
 
+# 月間集計項目のセル
+CELL_SCHEDULED_TOTAL = "Q42"          # 定時合計
+CELL_BREAK_TIME_1_TOTAL = "T42"       # 休憩時間①合計
+CELL_BREAK_TIME_2_TOTAL = "W42"       # 休憩時間②合計
+CELL_BREAK_TIME_3_TOTAL = "Z42"       # 休憩時間③合計
+CELL_LEAVE_TIME_TOTAL = "AC42"        # 離業時間合計
+CELL_ACTUAL_WORK_TIME_TOTAL = "AF42"  # 実働時間合計
+CELL_OVERTIME_TOTAL = "AI42"          # 超勤合計
+CELL_HOLIDAY_WORK_TOTAL = "AL42"      # 休日出勤合計
+CELL_OVERTIME_PLUS_HOLIDAY_TOTAL = "AI43"  # 超勤＋休日出勤合計
+CELL_LATE_NIGHT_TOTAL = "AM42"        # 深夜合計
+
 # フロント入力対象外（要件定義書4.3節「フロント入力対象外とするセル範囲」）
 NON_EDITABLE_RANGES = ("F11:G16", "F18:H21")
 
@@ -378,6 +390,33 @@ def read_day_rows(workbook: Workbook, sheet_name: str = SHEET_HONBUN) -> list[Da
 
     return results
 
+def write_monthly_totals(workbook, totals):
+    """
+    月間集計値を原本シートの合計欄に書き込む。
+    """
+    ws = workbook[SHEET_HONBUN]
+
+    total_cells = {
+        CELL_SCHEDULED_TOTAL: totals.scheduled_total,
+        CELL_BREAK_TIME_1_TOTAL: totals.break_time_1_total,
+        CELL_BREAK_TIME_2_TOTAL: totals.break_time_2_total,
+        CELL_BREAK_TIME_3_TOTAL: totals.break_time_3_total,
+        CELL_LEAVE_TIME_TOTAL: totals.leave_time_total,
+        CELL_ACTUAL_WORK_TIME_TOTAL: totals.actual_work_time_total,
+        CELL_OVERTIME_TOTAL: totals.overtime_total,
+        CELL_HOLIDAY_WORK_TOTAL: totals.holiday_work_total,
+        CELL_OVERTIME_PLUS_HOLIDAY_TOTAL: totals.overtime_plus_holiday_total,
+        CELL_LATE_NIGHT_TOTAL: totals.late_night_total,
+    }
+
+    for cell, time_value in total_cells.items():
+        if time_value is None:
+            ws[cell] = None
+        else:
+            hour, minute = time_value
+            total_minutes = hour * 60 + minute
+            ws[cell] = total_minutes / (24 * 60)
+            ws[cell].number_format = '[h]:mm;[Red]-[h]:mm'
 
 def write_day_cell(
     workbook: Workbook,
