@@ -212,6 +212,32 @@ class DayEditInput:
     leave_time: Optional[tuple[int, int]]
     work_note: str
 
+def _time_tuple_to_minutes(value):
+    """
+    時間を表す (時, 分) タプルを、分単位の整数に変換する。
+
+    None の場合は 0 分として扱う。
+    時間がマイナスの場合は、時・分の両方をマイナスとして計算する。
+    例：
+        (1, 30)  -> 90
+        (-1, 20) -> -80
+        (0, 30)  -> 30
+        None     -> 0
+
+    月間集計の差し引き計算などで、時間の合計を正確に扱うために使用する。
+    """
+    if value is None:
+        return 0
+
+    # タプルから時と分を取得
+    hour, minute = value
+
+    # 時がマイナスの場合、時と分を合わせてマイナスの分数に変換
+    if hour < 0:
+        return -(abs(hour) * 60 + minute)
+
+    # プラスまたは0時間の場合、分単位に変換
+    return hour * 60 + minute
 
 def _sum_time_tuples(values: list) -> Optional[tuple[int, int]]:
     """
@@ -264,8 +290,8 @@ def _calc_totals(entries: list[DayEntry]) -> AttendanceTotals:
         scheduled_total = None
     else:
         deduction = overtime_plus_holiday_total or (0, 0)
-        actual_minutes = actual_work_total[0] * 60 + actual_work_total[1]
-        deduction_minutes = deduction[0] * 60 + deduction[1]
+        actual_minutes = _time_tuple_to_minutes(actual_work_total)
+        deduction_minutes = _time_tuple_to_minutes(deduction)
         diff_minutes = actual_minutes - deduction_minutes
         sign = -1 if diff_minutes < 0 else 1
         abs_minutes = abs(diff_minutes)
@@ -397,6 +423,33 @@ def _load_attendance_from_sheet(handle: WorkbookHandle, sheet_name: str) -> Atte
         totals=totals,
     )
 
+def _calc_totals_from_workbook(
+    workbook,
+    handle: WorkbookHandle,
+) -> AttendanceTotals:
+    """
+    保存前のワークブックから日別データを読み取り、
+    Python側で月間集計を再計算する。
+    """
+    header = excel_adapter.read_header_values(
+        workbook,
+        sheet_name=excel_adapter.SHEET_HONBUN,
+    )
+    day_rows = excel_adapter.read_day_rows(
+        workbook,
+        sheet_name=excel_adapter.SHEET_HONBUN,
+    )
+
+    entries = [
+        _day_cell_values_to_entry(d, header)
+        for d in day_rows
+    ]
+    entries = _filter_entries_to_month_days(
+        entries,
+        handle.target_month,
+    )
+
+    return _calc_totals(entries)
 
 def load_attendance(handle: WorkbookHandle) -> AttendanceData:
     """
@@ -534,6 +587,12 @@ def save_attendance(
             set_work_note=True,
         )
 
+    # 月間集計を再計算
+    totals = _calc_totals_from_workbook(workbook, handle)
+
+    # Excelの月間集計欄に書き込む
+    excel_adapter.write_monthly_totals(workbook, totals)
+    
     excel_adapter.save_workbook_to_path(workbook, handle.local_path)
     onedrive_adapter.upload_file(
         handle.local_path, handle.onedrive_relative_path, overwrite=True
